@@ -1,0 +1,43 @@
+{
+    "name": "scroll3d",
+    "version": "1.0.0",
+    "description": "A javascript software game scrollable 3d tilemap rendering engine.",
+    "scripts": {
+        "build": "webpack --config webpack.common.cjs"
+    },
+    "keywords": ["engine", "library", "ape apps", "module", "game", "3d"],
+    "homepage": "https://www.ape-apps.com",
+    "bugs": {
+        "email": "support@ape-apps.com"
+    },
+    "author": {
+        "name": "Ape Apps",
+        "email": "support@ape-apps.com",
+        "url": "https://www.ape-apps.com"
+    },
+    "funding": {
+        "type": "patreon",
+        "url": "https://www.patreon.com/apeapps"
+    },
+    "license": "Apache-2.0",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/bastecklein/scroll3d"
+    },
+    "main": "src/index.js",
+    "config": {},
+    "dependencies": {
+        "common-helpers": "git+ssh://git@github.com:bastecklein/common-helpers.git#main",
+        "input-helper": "git+ssh://git@github.com:bastecklein/input-helper.git#main",
+        "gamepadhelper": "git+ssh://git@github.com:bastecklein/gamepadhelper.git#main",
+        "vpploader": "git+ssh://git@github.com:bastecklein/vpploader.git#main",
+        "three": "*",
+        "ppp-tools": "git+ssh://git@github.com:bastecklein/ppp-tools.git#main"
+    },
+    "devDependencies": {
+        "webpack": "*",
+        "webpack-cli": "*"
+    },
+    "private": false,
+    "type": "module"
+}
