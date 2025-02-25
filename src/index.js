@@ -3586,7 +3586,7 @@ function initInstanceCube(obj) {
 
     if(obj.basicMat) {
         material = new MeshBasicMaterial({
-            opacity: this.opacity,
+            opacity: obj.opacity,
             transparent: transparent
         });
     }
@@ -3616,7 +3616,7 @@ function initInstanceCube(obj) {
         obj.scene.add(obj.mesh);
     }
     
-    normalizeObjectPosition(this);
+    normalizeObjectPosition(obj);
 }
 
 function initCubeObject(obj) {
