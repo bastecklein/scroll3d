@@ -3208,6 +3208,10 @@ function initInstance(instance) {
     }, 500);
 }
 
+/**
+ * Initialize the world object based on its type.
+ * @param {WorldObject} obj - The world object to initialize.
+ */
 function initWorldObject(obj) {
     if(obj.type == "bar") {
         initBarObject(obj);
@@ -3360,6 +3364,10 @@ function initFogObject(obj) {
     obj.object.add(obj.mesh);
 }
 
+/**
+ * Initialize the VPP object based on its properties.
+ * @param {WorldObject} obj - The world object to initialize.
+ */
 function initVPPObject(obj) {
     let path = null;
     let data = null;
@@ -3491,7 +3499,13 @@ function initVPPObject(obj) {
             useLights: false
         };
 
+        console.log("load vpp");
+        console.log(opts);
+
         vppLoader.load(opts, function(mesh) {
+
+            console.log(mesh);
+
             if(obj.isDisposed || !mesh) {
                 return;
             }
