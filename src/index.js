@@ -643,7 +643,7 @@ function onResize() {
     }
 }
 
-class Scroll3dEngine {
+export class Scroll3dEngine {
     constructor(holder, options) {
         this.id = guid();
         this.holder = holder;
@@ -4855,9 +4855,9 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
         useMid = getTextureIndex({
             texture: obj.middle,
             noise: defTexture.noise,
-            noiseSize: this.vppSize,
+            noiseSize: instance.vppSize,
             topBlendColor: defMidBleed
-        }, data, this);
+        }, data, instance);
 
         if(useMid == -1) {
             setTimeout(function() {
@@ -4874,9 +4874,9 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
         useBottom = getTextureIndex({
             texture: obj.bottom,
             noise: defTexture.noise,
-            noiseSize: this.vppSize,
+            noiseSize: instance.vppSize,
             topBlendColor: null
-        },data,this);
+        },data,instance);
 
         if(useBottom == -1) {
             setTimeout(function() {
@@ -4893,9 +4893,9 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
         let topNoise = defTexture.noise;
 
         if(obj.isWater) {
-            opacity = this.defaultWaterOpacity;
+            opacity = instance.defaultWaterOpacity;
 
-            if(this.waterTexture) {
+            if(instance.waterTexture) {
                 topNoise = true;
             } else {
                 topNoise = false;
@@ -4904,10 +4904,10 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
             useMid = getTextureIndex({
                 texture: "#000000",
                 noise: false,
-                noiseSize: this.vppSize,
+                noiseSize: instance.vppSize,
                 topBlendColor: null,
                 opacity: 0
-            },data,this);
+            },data,instance);
                     
             waterColor = obj.top;
 
@@ -4978,7 +4978,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
         useTop = getTextureIndex({
             texture:obj.top,
             noise: useNoise,
-            noiseSize: this.vppSize,
+            noiseSize: instance.vppSize,
             topBlendColor: null,
             opacity: opacity,
             speckles: speckles,
@@ -4990,7 +4990,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
             topAlt: topAlt,
             pppTextureDataColor: pppTextureDataColor,
             pppTextureData: pppTextureData
-        },data,this);
+        },data,instance);
 
         if(useTop == -1) {
             setTimeout(function() {
@@ -5049,7 +5049,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                     }
                 }
 
-                if(obj.isWater && this.waterTexture) {
+                if(obj.isWater && instance.waterTexture) {
                     hasWater = true;
                 }
 
@@ -5075,7 +5075,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                         usecor = slopes[obj.slope];
                     }
 
-                    if(obj.isWater && this.waterTexture) {
+                    if(obj.isWater && instance.waterTexture) {
 
                         for (const {pos, uv} of corners) {
                             positions.push(pos[0] + x, (pos[1] + y) - 1, pos[2] + z);
@@ -5500,6 +5500,7 @@ function actualLocationToVirtual(instance,x,y) {
         const hits = instance.raycaster.intersectObjects(instance.hitTestObjects,true);
         return checkHits(hits);
     } catch(ex) {
+        console.log(ex);
         return null;
     }
 }
@@ -7830,5 +7831,6 @@ export default {
     DEF_PHI,
     DEF_THETA,
     DEF_RADIUS,
-    CAMERA_MODES
+    CAMERA_MODES,
+    Scroll3dEngine
 };
