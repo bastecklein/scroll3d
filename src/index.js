@@ -3499,12 +3499,7 @@ function initVPPObject(obj) {
             useLights: false
         };
 
-        console.log("load vpp");
-        console.log(opts);
-
         vppLoader.load(opts, function(mesh) {
-
-            console.log(mesh);
 
             if(obj.isDisposed || !mesh) {
                 return;
