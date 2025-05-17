@@ -89,7 +89,8 @@ export const CAMERA_MODES = {
 const USE_COLORSPACE = SRGBColorSpace;
 
 const DEF_CAMZ_OFFSET = 1.3;
-const TARGET_DELTA = 1000 / 60;
+const TARGET_FPS = 60;
+const TARGET_DELTA = 1000 / TARGET_FPS;
 const SUN_INTENSITY = 4.25;
 const π = Math.PI;
 const ONE_POINT_FIVE_π = π * 1.5;
@@ -671,6 +672,7 @@ export class Scroll3dEngine {
 
         this.lastRAF = null;
         this.curDelta = 1;
+        this.curFPS = TARGET_FPS;
 
         this.sunSphere = null;
 
@@ -6818,8 +6820,14 @@ function handleInstanceRender(instance, t) {
 
     instance.curDelta = elapsed / TARGET_DELTA;
 
+    instance.curFPS = 1000 / elapsed;
+
     if(isNaN(instance.curDelta)) {
         instance.curDelta = 1;
+    }
+
+    if(isNaN(instance.curFPS)) {
+        instance.curFPS = TARGET_FPS;
     }
 
     if(GPH) {
@@ -6884,7 +6892,7 @@ function handleInstanceRender(instance, t) {
     }
     
     if(instance.renderLoopFunction) {
-        instance.renderLoopFunction(elapsed, instance.curDelta);
+        instance.renderLoopFunction(elapsed, instance.curDelta, instance.curFPS);
     }
 
     if(instance.orientationRenderer) {
@@ -7065,8 +7073,8 @@ function onMove(e) {
     if(pointer.down) {
 
         if(instance.cameraMode == CAMERA_MODES.ROTATE) {
-            const difX = (x - pointer.x) * instance.effectiveScale;
-            const difY = (y - pointer.y) * instance.effectiveScale;
+            const difX = (x - pointer.x) / instance.effectiveScale;
+            const difY = (y - pointer.y) / instance.effectiveScale;
 
             instance.theta = - (difX * 0.5) + pointer.theta;
             instance.phi = (difY * 0.5) + pointer.phi;
@@ -7094,8 +7102,8 @@ function onMove(e) {
 
         
         if(instance.cameraMode == CAMERA_MODES.PAN) {
-            const difX = (pointer.lx - x) * instance.effectiveScale;
-            const difY = (pointer.ly - y) * instance.effectiveScale;
+            const difX = (pointer.lx - x) / instance.effectiveScale;
+            const difY = (pointer.ly - y) / instance.effectiveScale;
 
             conductPan(instance, difX, difY);
         }
@@ -7640,7 +7648,7 @@ function handlePinch(instance) {
         return;
     }
 
-    const c = distBetweenPoints(pointer1.lx, pointer1.ly, pointer2.lx, pointer2.ly) * instance.effectiveScale;
+    const c = distBetweenPoints(pointer1.lx, pointer1.ly, pointer2.lx, pointer2.ly) / instance.effectiveScale;
 
     if(instance.lastPinchDistance == 0) {
         instance.lastPinchDistance = c;
