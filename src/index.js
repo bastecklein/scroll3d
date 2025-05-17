@@ -6870,8 +6870,17 @@ function handleInstanceRender(instance, t) {
         if(!instance.virtPad) {
             instance.virtPad = GPH.createVirtualPad({
                 canvas: instance.touchOverlay,
-                leftStick: true
+                leftStick: true,
+                buttons: [
+                    {
+                        right: 12,
+                        bottom: 12,
+                        glyph: "fluent.&#xE170;"
+                    }
+                ]
             });
+
+            console.log(instance.virtPad);
         }
 
         instance.virtPad.render();
