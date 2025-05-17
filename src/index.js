@@ -650,6 +650,7 @@ export class Scroll3dEngine {
         this.holder = holder;
 
         this.canvas = options.canvas || null;
+        this.touchOverlay = null;
 
         this.orientationHolder = null;
         this.orientationCamera = null;
@@ -661,6 +662,9 @@ export class Scroll3dEngine {
 
         this.currentVRVector = new Vector3();
         this.currentVRCamRads = 0;
+
+        this.touchPadMode = options.touchPadMode || false;
+        this.virtPad = null;
 
         this.sceneScale = 1;
 
@@ -875,6 +879,10 @@ export class Scroll3dEngine {
 
     resize() {
         setInstanceSize(this);
+    }
+
+    setTouchPadMode(mode) {
+        this.touchPadMode = mode;
     }
 
     addObject(options) {
@@ -3146,6 +3154,12 @@ function setInstanceSize(instance) {
         }
         
     }
+
+    if(instance.touchOverlay) {
+        instance.touchOverlay.width = instance.holder.offsetWidth;
+        instance.touchOverlay.height = instance.holder.offsetHeight;
+    }
+    
 }
 
 function initInstance(instance) {
@@ -6238,6 +6252,19 @@ function rebuildInstanceRenderer(instance) {
 
     if(instance.firstSetup) {
         instance.canvas.instanceId = instance.id;
+        instance.canvas.style.pointerEvents = "none";
+
+        instance.touchOverlay = document.createElement("canvas");
+
+        instance.touchOverlay.width = instance.holder.offsetWidth;
+        instance.touchOverlay.height = instance.holder.offsetHeight;
+
+        instance.touchOverlay.style.position = "absolute";
+        instance.touchOverlay.style.top = "0px";
+        instance.touchOverlay.style.left = "0px";
+
+        instance.touchOverlay.style.width = "100%";
+        instance.touchOverlay.style.height = "100%";
 
         instance.canvas.ontouchstart = function(e){e.preventDefault();};
         instance.canvas.ontouchend = function(e){e.preventDefault();};
@@ -6833,11 +6860,34 @@ function handleInstanceRender(instance, t) {
         instance.curDelta = 1;
     }
 
-    if(GPH) {
-        currentGPPollInstance = instance.id;
-        GPH.forcePoll();
+    currentGPPollInstance = instance.id;
+    GPH.forcePoll();
 
-        handleInstanceGamepadScrolling(instance);
+    handleInstanceGamepadScrolling(instance);
+
+    if(instance.touchPadMode) {
+        if(!instance.virtPad) {
+            instance.virtPad = GPH.createVirtualPad({
+                canvas: instance.touchOverlay,
+                leftStick: true
+            });
+        }
+
+        if(instance.canvas.style.pointerEvents != "none") {
+            instance.canvas.style.pointerEvents = "none";
+        }
+
+        if(instance.touchOverlay.style.display != "block") {
+            instance.touchOverlay.style.display = "block";
+        }
+    } else {
+        if(instance.canvas.style.pointerEvents != "all") {
+            instance.canvas.style.pointerEvents = "all";
+        }
+
+        if(instance.touchOverlay.style.display != "none") {
+            instance.touchOverlay.style.display = "none";
+        }
     }
 
     for(let ps in instance.particleSystems) {
