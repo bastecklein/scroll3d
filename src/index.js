@@ -5501,7 +5501,7 @@ function clearAutoCircleObjects(instance) {
     instance.curAutoCircleObjects = [];
 }
 
-function actualLocationToVirtual(instance,x,y) {
+function actualLocationToVirtual(instance, x, y) {
     instance.mouse.set((x / instance.lastWidth) * 2 - 1, - (y / instance.lastHeight) * 2 + 1);
     instance.raycaster.setFromCamera(instance.mouse, instance.camera);
 
@@ -6982,12 +6982,13 @@ function onDown(e) {
     let x = e.x;
     let y = e.y;
 
+    /*
     if(instance.canvas.width > instance.holder.offsetWidth) {
         const scale = instance.canvas.width / instance.holder.offsetWidth;
 
         x *= scale;
         y *= scale;
-    }
+    }*/
 
     if(instance.pointerListener) {
         instance.pointerListener({
@@ -7002,12 +7003,14 @@ function onDown(e) {
         });
     }
 
-    let pointer = getPointer(instance, e.id, x, y, e.type, e.which);
+    const pointer = getPointer(instance, e.id, x, y, e.type, e.which);
+
     pointer.down = true;
     pointer.x = x;
     pointer.y = y;
     pointer.lx = x;
     pointer.ly = y;
+
     instance.pointersDown++;
 
     if(e.type == "mouse" && e.which && e.which == 3) {
@@ -7031,12 +7034,13 @@ function onMove(e) {
     let x = e.x;
     let y = e.y;
 
+    /*
     if(instance.canvas.width > instance.holder.offsetWidth) {
         const scale = instance.canvas.width / instance.holder.offsetWidth;
 
         x *= scale;
         y *= scale;
-    }
+    }*/
 
     if(instance.pointerListener) {
         instance.pointerListener({
@@ -7092,7 +7096,7 @@ function onMove(e) {
             const difX = pointer.lx - x;
             const difY = pointer.ly - y;
 
-            conductPan(instance,difX,difY);
+            conductPan(instance, difX, difY);
         }
 
     }
@@ -7658,7 +7662,7 @@ function handlePinch(instance) {
 function checkHoverHit(instance, x, y, pointer, type) {
 
 
-    const hitPosition = actualLocationToVirtual(instance,x,y);
+    const hitPosition = actualLocationToVirtual(instance, x, y);
 
     if(hitPosition) {
         instance.lastHoverReport.x = hitPosition.x;
