@@ -673,6 +673,7 @@ export class Scroll3dEngine {
         this.lastRAF = null;
         this.curDelta = 1;
         this.curFPS = TARGET_FPS;
+        this.lastFPS = [TARGET_FPS];
 
         this.sunSphere = null;
 
@@ -6820,14 +6821,12 @@ function handleInstanceRender(instance, t) {
 
     instance.curDelta = elapsed / TARGET_DELTA;
 
-    instance.curFPS = 1000 / elapsed;
+    instance.lastFPS.push(1000 / elapsed);
+
+    calculateCurrentFPS(instance);
 
     if(isNaN(instance.curDelta)) {
         instance.curDelta = 1;
-    }
-
-    if(isNaN(instance.curFPS)) {
-        instance.curFPS = TARGET_FPS;
     }
 
     if(GPH) {
@@ -7838,6 +7837,26 @@ function addFlakes(system, size, cSpline, aSpline, snowCenterPos, addCount) {
             rotation: Math.random() * 2.0 * π,
             velocity: new Vector3(0, -3.5, 0)
         }));
+    }
+}
+
+function calculateCurrentFPS(instance) {
+    let fps = 0;
+
+    for(let i = 0; i < instance.lastFPS.length; i++) {
+        fps += instance.lastFPS[i];
+    }
+
+    fps /= instance.lastFPS.length;
+
+    instance.curFPS = fps;
+
+    if(isNaN(instance.curFPS)) {
+        instance.curFPS = TARGET_FPS;
+    }
+
+    if(instance.lastFPS.length > 100) {
+        instance.lastFPS.shift();
     }
 }
 
