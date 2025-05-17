@@ -1,4 +1,4 @@
-import { guid, removeFromArray, hexToRGB, rgbToHex, hash, randomIntFromInterval } from "common-helpers";
+import { guid, removeFromArray, hexToRGB, rgbToHex, hash, randomIntFromInterval, distBetweenPoints } from "common-helpers";
 import { handleInput } from "input-helper";
 import GPH from "gamepadhelper";
 
@@ -821,6 +821,7 @@ export class Scroll3dEngine {
         this.lastHeight = 0;
 
         this.renderScale = options.renderScale || 1.0;
+        this.effectiveScale = 1;
 
         this.useDOFEffect = options.useDOFEffect || false;
 
@@ -3128,6 +3129,9 @@ function setInstanceSize(instance) {
     updateFOVCamera(instance);
 
     if(instance.canvas) {
+
+        instance.effectiveScale = instance.canvas.width / instance.holder.offsetWidth;
+
         if(instance.forceHeight == null || instance.forceWidth == null) {
             instance.canvas.style.width = "100%";
             instance.canvas.style.height = "100%";
@@ -6982,11 +6986,9 @@ function onDown(e) {
     let x = e.x;
     let y = e.y;
     
-    if(instance.canvas.width != instance.holder.offsetWidth) {
-        const scale = instance.canvas.width / instance.holder.offsetWidth;
-
-        x *= scale;
-        y *= scale;
+    if(instance.effectiveScale != 1) {
+        x *= instance.effectiveScale;
+        y *= instance.effectiveScale;
     }
 
     if(instance.pointerListener) {
@@ -7033,11 +7035,9 @@ function onMove(e) {
     let x = e.x;
     let y = e.y;
     
-    if(instance.canvas.width != instance.holder.offsetWidth) {
-        const scale = instance.canvas.width / instance.holder.offsetWidth;
-
-        x *= scale;
-        y *= scale;
+    if(instance.effectiveScale != 1) {
+        x *= instance.effectiveScale;
+        y *= instance.effectiveScale;
     }
 
     if(instance.pointerListener) {
@@ -7065,8 +7065,11 @@ function onMove(e) {
     if(pointer.down) {
 
         if(instance.cameraMode == CAMERA_MODES.ROTATE) {
-            instance.theta = - ((x - pointer.x ) * 0.5 ) + pointer.theta;
-            instance.phi = ((y - pointer.y ) * 0.5 ) + pointer.phi;
+            const difX = (x - pointer.x) * instance.effectiveScale;
+            const difY = (y - pointer.y) * instance.effectiveScale;
+
+            instance.theta = - (difX * 0.5) + pointer.theta;
+            instance.phi = (difY * 0.5) + pointer.phi;
 
             if(instance.theta > 720) {
                 instance.theta = instance.theta - 720;
@@ -7091,8 +7094,8 @@ function onMove(e) {
 
         
         if(instance.cameraMode == CAMERA_MODES.PAN) {
-            const difX = pointer.lx - x;
-            const difY = pointer.ly - y;
+            const difX = (pointer.lx - x) * instance.effectiveScale;
+            const difY = (pointer.ly - y) * instance.effectiveScale;
 
             conductPan(instance, difX, difY);
         }
@@ -7637,9 +7640,7 @@ function handlePinch(instance) {
         return;
     }
 
-    let a = pointer1.lx - pointer2.lx;
-    let b = pointer1.ly - pointer2.ly;
-    let c = Math.sqrt( a*a + b*b );
+    const c = distBetweenPoints(pointer1.lx, pointer1.ly, pointer2.lx, pointer2.ly) * instance.effectiveScale;
 
     if(instance.lastPinchDistance == 0) {
         instance.lastPinchDistance = c;
@@ -7647,11 +7648,11 @@ function handlePinch(instance) {
     }
 
     if(c > instance.lastPinchDistance + 3) {
-        doZoom(instance,-1);
+        doZoom(instance, -1);
     }
 
     if(c < instance.lastPinchDistance - 3) {
-        doZoom(instance,1);
+        doZoom(instance, 1);
     }
 
     instance.lastPinchDistance = c;
