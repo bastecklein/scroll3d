@@ -6981,14 +6981,13 @@ function onDown(e) {
 
     let x = e.x;
     let y = e.y;
-
-    /*
-    if(instance.canvas.width > instance.holder.offsetWidth) {
+    
+    if(instance.canvas.width != instance.holder.offsetWidth) {
         const scale = instance.canvas.width / instance.holder.offsetWidth;
 
         x *= scale;
         y *= scale;
-    }*/
+    }
 
     if(instance.pointerListener) {
         instance.pointerListener({
@@ -7033,14 +7032,13 @@ function onMove(e) {
 
     let x = e.x;
     let y = e.y;
-
-    /*
-    if(instance.canvas.width > instance.holder.offsetWidth) {
+    
+    if(instance.canvas.width != instance.holder.offsetWidth) {
         const scale = instance.canvas.width / instance.holder.offsetWidth;
 
         x *= scale;
         y *= scale;
-    }*/
+    }
 
     if(instance.pointerListener) {
         instance.pointerListener({
