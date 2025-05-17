@@ -1577,7 +1577,7 @@ export class Scroll3dEngine {
         initPostProcessor(instance);
     }
 
-    getGroundPosForOb(id, ux = null, uy = null) {
+    getGroundPosForOb(id, ux = null, uy = null, vsOb = null) {
         const instance = this;
         const object = instance.objects[id];
 
@@ -1591,6 +1591,22 @@ export class Scroll3dEngine {
 
         if(uy == null) {
             uy = object.y;
+        }
+
+        let chkOb = null;
+
+        if(vsOb) {
+            chkOb = instance.objects[vsOb];
+
+            if(chkOb && chkOb.instanceParentId) {
+                chkOb = instance.objects[chkOb.instanceParentId];
+            }
+        }
+
+        let checkAgainst = instance.hitTestObjects;
+
+        if(chkOb) {
+            checkAgainst = [chkOb.object];
         }
 
         const obTop = (object.z * 2) + object.rawTallness;
@@ -1614,7 +1630,7 @@ export class Scroll3dEngine {
         instance.raycaster.set(instance.custCastOrigin, instance.custCastDirection);
 
         try {
-            const hits = instance.raycaster.intersectObjects(instance.hitTestObjects, true);
+            const hits = instance.raycaster.intersectObjects(checkAgainst, true);
             const checkFromSky = checkHits(hits, id);
 
             if(checkFromSky && checkFromSky.abs && checkFromSky.abs.z > dispTop) {
@@ -1622,7 +1638,7 @@ export class Scroll3dEngine {
                 instance.custCastOrigin.set(cx, obTop, cy);
                 instance.raycaster.set(instance.custCastOrigin, instance.custCastDirection);
 
-                const hits2 = instance.raycaster.intersectObjects(instance.hitTestObjects, true);
+                const hits2 = instance.raycaster.intersectObjects(checkAgainst, true);
                 const checkFromHead = checkHits(hits2, id);
 
                 // if we have a hit above ground level, report that
@@ -1633,7 +1649,7 @@ export class Scroll3dEngine {
                 // otherwise look to the sky.  if we hit something, there is probably an overhang
                 instance.raycaster.set(instance.custCastOrigin, instance.upCastDirection);
 
-                const hits3 = instance.raycaster.intersectObjects(instance.hitTestObjects, true);
+                const hits3 = instance.raycaster.intersectObjects(checkAgainst, true);
                 const checkToSky = checkHits(hits3, id);
 
                 if(checkToSky && checkToSky.abs) {
@@ -1642,7 +1658,7 @@ export class Scroll3dEngine {
                     instance.custCastOrigin.set(cx, checkToSky.abs.z * 2, cy);
                     instance.raycaster.set(instance.custCastOrigin, instance.custCastDirection);
 
-                    const hits4 = instance.raycaster.intersectObjects(instance.hitTestObjects, true);
+                    const hits4 = instance.raycaster.intersectObjects(checkAgainst, true);
                     const checkBackToGround = checkHits(hits4, id);
 
                     if(checkBackToGround && checkBackToGround.abs && checkBackToGround.abs.z < dispTop) {
@@ -3441,10 +3457,6 @@ function initVPPObject(obj) {
 
     if(obj.basicMat) {
         meshName += ".bm";
-    }
-
-    if(obj.color2) {
-        console.log("need instance for: " + meshName);
     }
 
     if(obj.instance && obj.instance.vppInstances[meshName] && !blockVPPMeshIds[meshName] && !obj.blockInstancing) {
