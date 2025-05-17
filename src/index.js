@@ -6874,6 +6874,8 @@ function handleInstanceRender(instance, t) {
             });
         }
 
+        instance.virtPad.render();
+
         if(instance.canvas.style.pointerEvents != "none") {
             instance.canvas.style.pointerEvents = "none";
         }
