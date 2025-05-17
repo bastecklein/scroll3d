@@ -6255,6 +6255,7 @@ function rebuildInstanceRenderer(instance) {
         instance.canvas.style.pointerEvents = "none";
 
         instance.touchOverlay = document.createElement("canvas");
+        instance.holder.appendChild(instance.touchOverlay);
 
         instance.touchOverlay.width = instance.holder.offsetWidth;
         instance.touchOverlay.height = instance.holder.offsetHeight;
