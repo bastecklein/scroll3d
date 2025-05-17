@@ -3429,6 +3429,10 @@ function initVPPObject(obj) {
         meshName += ".bm";
     }
 
+    if(obj.color2) {
+        console.log("need instance for: " + meshName);
+    }
+
     if(obj.instance && obj.instance.vppInstances[meshName] && !blockVPPMeshIds[meshName] && !obj.blockInstancing) {
 
         obj.instanceParentId = meshName;
