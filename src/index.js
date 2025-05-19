@@ -6830,8 +6830,7 @@ function setVRCameraTheta(instance) {
 }
 
 function normalizeAperture(ap) {
-    //return ap * 0.001;
-    return ap;
+    return ap * 0.001;
 }
 
 function initController(instance, index) {
