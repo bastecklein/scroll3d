@@ -1,6 +1,6 @@
 {
     "name": "scroll3d",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "A javascript software game scrollable 3d tilemap rendering engine.",
     "scripts": {
         "build": "webpack --config webpack.common.cjs"

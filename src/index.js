@@ -5744,7 +5744,6 @@ function updateFOVCamera(instance) {
     if(instance.postprocessor && instance.postprocessor.bokeh) {
         instance.postprocessor.bokeh.uniforms.focus.value = instance.radius + instance.focusMod;
         instance.postprocessor.bokeh.uniforms.aperture.value = normalizeAperture(instance.apertureRatio);
-        console.log("bookeh settings: " + instance.apertureRatio + " - " + instance.focusMod);
     }
 }
 
