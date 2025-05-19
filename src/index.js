@@ -2230,6 +2230,7 @@ export class Scroll3dEngine {
 
             setHudCanvasPosition(instance);
             
+            instance.currentHudCanvasMesh.layers.set(1);
             instance.camera.add(instance.currentHudCanvasMesh);
             
             instance.currentHudCanvasTexture.needsUpdate = true;
@@ -7426,6 +7427,7 @@ function doPostProcessing(instance) {
     
         if(!rendered && instance.postprocessor) {
             if(instance.postprocessor.composer) {
+                instance.camera.layers.set(0);
                 instance.postprocessor.composer.render(0.1);
                 rendered = true;
             }
@@ -7433,8 +7435,21 @@ function doPostProcessing(instance) {
     }
         
 
-    if(!rendered) {
+    if(rendered) {
+        if(instance.currentHudCanvas) {
+            instance.renderer.clearDepth();
+            instance.camera.layers.set(1);
+            instance.renderer.render(instance.scene, instance.camera);
+        }
+        
+    } else {
         instance.renderer.render(instance.scene, instance.camera);
+
+        if(instance.currentHudCanvas) {
+            instance.renderer.clearDepth();
+            instance.camera.layers.set(1);
+            instance.renderer.render(instance.scene, instance.camera);
+        }
     }
         
 
