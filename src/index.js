@@ -665,6 +665,9 @@ export class Scroll3dEngine {
 
         this.touchPadMode = options.touchPadMode || false;
         this.virtPad = null;
+        this.touchPadButtons = null;
+        this.virtPadLeft = true;
+        this.virtPadRight = true;
 
         this.sceneScale = 1;
 
@@ -881,8 +884,18 @@ export class Scroll3dEngine {
         setInstanceSize(this);
     }
 
-    setTouchPadMode(mode) {
+    setTouchPadMode(mode, leftStick = true, rightStick = true, buttons = null) {
         this.touchPadMode = mode;
+
+        this.virtPadLeft = leftStick;
+        this.virtPadRight = rightStick;
+        this.touchPadButtons = buttons || [];
+
+        if(this.virtPad) {
+            this.virtPad.leftStick = leftStick;
+            this.virtPad.rightStick = rightStick;
+            this.virtPad.buttons = buttons || [];
+        }
     }
 
     addObject(options) {
@@ -1670,7 +1683,6 @@ export class Scroll3dEngine {
             return checkFromSky;
         } catch(ex) {
             console.log(ex);
-            
         }
 
         return null;
@@ -6882,17 +6894,10 @@ function handleInstanceRender(instance, t) {
         if(!instance.virtPad) {
             instance.virtPad = GPH.createVirtualPad({
                 canvas: instance.touchOverlay,
-                leftStick: true,
-                buttons: [
-                    {
-                        right: 12,
-                        bottom: 12,
-                        glyph: "fluent.&#xE170;"
-                    }
-                ]
+                leftStick: instance.virtPadLeft,
+                rightStick: instance.virtPadRight,
+                buttons: instance.touchPadButtons
             });
-
-            console.log(instance.virtPad);
         }
 
         instance.virtPad.render();
