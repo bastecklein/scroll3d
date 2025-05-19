@@ -6276,6 +6276,7 @@ function rebuildInstanceRenderer(instance) {
 
     instance.renderer = new WebGLRenderer(rendererOptions);
     instance.renderer.setPixelRatio(window.devicePixelRatio);
+    instance.renderer.autoClear = false;
 
     instance.renderer.outputColorSpace = USE_COLORSPACE;
     instance.renderer.gammaOutput = true;
@@ -7417,6 +7418,9 @@ function stepParticleSystem(system,timeElapsed) {
  */
 function doPostProcessing(instance) {
 
+    instance.renderer.clear();
+    instance.camera.layers.set(0);
+
     let rendered = false;
 
     if(!instance.vrSession) {
@@ -7427,7 +7431,6 @@ function doPostProcessing(instance) {
     
         if(!rendered && instance.postprocessor) {
             if(instance.postprocessor.composer) {
-                instance.camera.layers.set(0);
                 instance.postprocessor.composer.render(0.1);
                 rendered = true;
             }
@@ -7461,6 +7464,8 @@ function doPostProcessing(instance) {
 
         instance.waterPlane.material.uniforms.time.value += globalClock.getDelta();
     }
+
+    instance.camera.layers.set(0);
 }
 
 function conductPan(instance, x, y) {
