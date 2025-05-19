@@ -1,3 +1,11 @@
+/**
+ * @typedef {object} Scroll3dPostProcessor
+ * @property {BokehPass} bokeh
+ * @property {EffectComposer} composer
+ * @property {RenderPass} render
+ * @property {FilmPass} film
+ */
+
 import { guid, removeFromArray, hexToRGB, rgbToHex, hash, randomIntFromInterval, distBetweenPoints } from "common-helpers";
 import { handleInput } from "input-helper";
 import GPH from "gamepadhelper";
@@ -644,7 +652,11 @@ function onResize() {
     }
 }
 
+/**
+ * Class representing a Scroll3d Engine instance.
+ */
 export class Scroll3dEngine {
+
     constructor(holder, options) {
         this.id = guid();
         this.holder = holder;
@@ -835,8 +847,14 @@ export class Scroll3dEngine {
 
         this.useDOFEffect = options.useDOFEffect || false;
 
+        /**
+         * @type {Scroll3dPostProcessor}
+         */
         this.postprocessor = null;
 
+        /**
+         * @type {AnaglyphEffect}
+         */
         this.effectAnaglyph = null;
         this.useAnaglyph = options.anaglyphMode || false;
 
@@ -3093,6 +3111,10 @@ function resetAtlasTexture() {
     // might have to loop though all chunks and reapply the material, or all objects?!
 }
 
+/**
+ * Set the size of the instance based on the holder's dimensions.
+ * @param {Scroll3dEngine} instance - The instance to set the size for.
+ */
 function setInstanceSize(instance) {
 
     let useWidth = instance.holder.offsetWidth;
@@ -3142,13 +3164,6 @@ function setInstanceSize(instance) {
             instance.postprocessor.composer.setSize(renderWidth, renderHeight);
         }
 
-        if(instance.postprocessor.fxaa) {
-            const pixelRatio = instance.renderer.getPixelRatio();
-
-            instance.postprocessor.fxaa.uniforms.resolution.value.x = 1 / (renderWidth * pixelRatio );
-            instance.postprocessor.fxaa.uniforms.resolution.value.y = 1 / (renderHeight * pixelRatio );
-        }
-
         if(instance.postprocessor.bokeh) {
             instance.postprocessor.bokeh.setSize(renderWidth, renderHeight);
         }
@@ -3190,6 +3205,10 @@ function setInstanceSize(instance) {
     
 }
 
+/**
+ * Initialize the instance with default settings.
+ * @param {Scroll3dEngine} instance - The instance to initialize.
+ */
 function initInstance(instance) {
 
     ColorManagement.enabled = true;
@@ -5563,6 +5582,9 @@ function actualLocationToVirtual(instance, x, y) {
     }
 }
 
+/**
+ * @param {Scroll3dEngine} instance - The instance of the object.
+ */
 function initPostProcessor(instance) {
         
     instance.postprocessor = null;
@@ -5577,7 +5599,6 @@ function initPostProcessor(instance) {
 
     instance.postprocessor = {};
 
-
     const composer = new EffectComposer(instance.renderer);
     instance.postprocessor.composer = composer;
 
@@ -5589,7 +5610,6 @@ function initPostProcessor(instance) {
             focus: instance.radius,
             aperture: 0.025,
             maxblur: 0.01,
-
             width: instance.lastWidth,
             height: instance.lastHeight
         } );
@@ -5601,7 +5621,6 @@ function initPostProcessor(instance) {
         instance.postprocessor.film = new FilmPass(0.10, 0.0, 0, instance.filmModeBW);
         composer.addPass(instance.postprocessor.film, 1);
     }
-
 
     const gammaCorrection = new ShaderPass(GammaCorrectionShader);
     composer.addPass(gammaCorrection);
@@ -5709,10 +5728,14 @@ function resetObjectCameraPosition(instance, obj) {
     use.localToWorld(obj.cameraPosition);
 }
 
+/**
+ * @param {Scroll3dEngine} instance - The instance of the object.
+ */
 function updateFOVCamera(instance) {
     if(instance.postprocessor && instance.postprocessor.bokeh) {
         instance.postprocessor.bokeh.uniforms.focus.value = instance.radius;
         instance.postprocessor.bokeh.uniforms.aperture.value = normalizeAperture(instance.apertureRatio);
+        console.log("set apertaure: " + instance.postprocessor.bokeh.uniforms.aperture.value);
     }
 }
 
@@ -7379,6 +7402,10 @@ function stepParticleSystem(system,timeElapsed) {
     updateParticleSystemGeometry(system);
 }
 
+/**
+ * Post-process the scene
+ * @param {Scroll3dEngine} instance - The instance object
+ */
 function doPostProcessing(instance) {
 
     let rendered = false;
