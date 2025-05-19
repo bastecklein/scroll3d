@@ -702,6 +702,7 @@ export class Scroll3dEngine {
 
         this.sizeOutMultiplier = DEF_SIZE_OUT_MULTIPLIER;
 
+        this.focusMod = 0;
         this.apertureRatio = DEF_APERTURE_RATIO;
         this.radius = DEF_RADIUS;
         this.phi = DEF_PHI; // "up and down" sphere position of camera
@@ -1900,6 +1901,13 @@ export class Scroll3dEngine {
 
     setMaxPhi(mp) {
         this.maxPhi = mp;
+    }
+
+    setFocusMod(mod) {
+        this.focusMod = mod;
+        updateFOVCamera(this);
+        this.camera.updateMatrix();
+        this.shouldRender = true;
     }
 
     setApertureRatio(ratio) {
@@ -5733,9 +5741,9 @@ function resetObjectCameraPosition(instance, obj) {
  */
 function updateFOVCamera(instance) {
     if(instance.postprocessor && instance.postprocessor.bokeh) {
-        instance.postprocessor.bokeh.uniforms.focus.value = instance.radius;
+        instance.postprocessor.bokeh.uniforms.focus.value = instance.radius + instance.focusMod;
         instance.postprocessor.bokeh.uniforms.aperture.value = normalizeAperture(instance.apertureRatio);
-        console.log("set apertaure: " + instance.postprocessor.bokeh.uniforms.aperture.value);
+        console.log("bookeh settings: " + instance.apertureRatio + " - " + instance.focusMod);
     }
 }
 
