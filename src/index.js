@@ -7793,34 +7793,48 @@ function processVPPInstancesOptimized(instance) {
         }
         
         // OPTIMIZATION 1: Use optimizeGeometry for better performance
-        const geometry = instOb.rawMesh.geometry;
+        let geometry = instOb.rawMesh.geometry;
         if(geometry && optimizeGeometry) {
             try {
                 const optimizedGeometry = optimizeGeometry(geometry);
-                if(optimizedGeometry !== geometry) {
-                    instOb.rawMesh.geometry = optimizedGeometry;
-                    console.log("DEBUG: Applied geometry optimization to", insName);
+                if(optimizedGeometry !== geometry && optimizedGeometry) {
+                    // Validate geometry
+                    if (!optimizedGeometry.getAttribute('position') || !optimizedGeometry.getAttribute('position').array) {
+                        console.warn("[VPP] Skipping invalid optimized geometry (missing position attribute)", insName);
+                    } else {
+                        optimizedGeometry.computeBoundingSphere();
+                        optimizedGeometry.computeBoundingBox();
+                        instOb.rawMesh.geometry = optimizedGeometry;
+                        geometry = optimizedGeometry;
+                        console.log("DEBUG: Applied geometry optimization to", insName);
+                    }
                 }
             } catch(error) {
                 console.warn("Geometry optimization failed:", error);
             }
         }
-        
         // OPTIMIZATION 2: Distance-based LOD
         let useOptimizedGeometry = false;
         if(instOb.box) {
             const chunkCenter = instOb.box.getCenter(new Vector3());
             const cameraPos = instance.camera.position;
             const distance = cameraPos.distanceTo(chunkCenter);
-            
             if(distance > 50 && generateLODGeometry) {
                 try {
                     // Generate LOD geometry for distant chunks
                     const lodGeometry = generateLODGeometry(instOb.rawMesh.geometry, 0.6); // 60% detail
                     if(lodGeometry) {
-                        instOb.rawMesh.geometry = lodGeometry;
-                        useOptimizedGeometry = true;
-                        console.log("DEBUG: Applied LOD optimization to distant chunk", insName, "at distance", distance.toFixed(1));
+                        // Validate geometry
+                        if (!lodGeometry.getAttribute('position') || !lodGeometry.getAttribute('position').array) {
+                            console.warn("[VPP] Skipping invalid LOD geometry (missing position attribute)", insName);
+                        } else {
+                            lodGeometry.computeBoundingSphere();
+                            lodGeometry.computeBoundingBox();
+                            instOb.rawMesh.geometry = lodGeometry;
+                            geometry = lodGeometry;
+                            useOptimizedGeometry = true;
+                            console.log("DEBUG: Applied LOD optimization to distant chunk", insName, "at distance", distance.toFixed(1));
+                        }
                     }
                 } catch(error) {
                     console.warn("LOD optimization failed:", error);
