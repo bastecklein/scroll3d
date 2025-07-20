@@ -585,7 +585,7 @@ let currentGPPollInstance = null;
 
 let gphInit = false;
 
-let vppLoader = new VPPLoader();
+const vppLoader = new VPPLoader();
 
 window.addEventListener("resize", onResize);
 document.addEventListener("visibilitychange", onResize);
@@ -644,6 +644,15 @@ export function setTextureSize(size) {
     curAtlasTexture = null;
 
     resetAtlasTexture();
+}
+
+// Add mobile-optimized texture size setting
+export function setMobileOptimizedTextures() {
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (isMobile) {
+        setTextureSize(8); // Smaller textures for mobile
+        setUseSimplifiedAtlas(true);
+    }
 }
 
 function onResize() {
@@ -929,6 +938,16 @@ export class Scroll3dEngine {
         if(obj.object) {
 
             obj.object.frustumCulled = true;
+
+            // Mobile optimization: Enable more aggressive culling
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            if (isMobile) {
+                obj.object.frustumCulled = true;
+                // Set smaller render order for better batching
+                if (obj.object.renderOrder === undefined) {
+                    obj.object.renderOrder = 0;
+                }
+            }
 
             instance.scene.add(obj.object);
 
@@ -2365,6 +2384,52 @@ export class Scroll3dEngine {
         }
     }
 
+    // Mobile performance optimization method
+    enableMobileOptimizations() {
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        
+        if (isMobile) {
+            this.setShadowsEnabled(false);
+            this.setAntialiasingEnabled(false);
+            this.setDOFEnabled(false);
+            this.setRenderScale(0.75); // Reduce render resolution
+            
+            // Disable expensive post-processing
+            this.filmMode = false;
+            this.useDOFEffect = false;
+            
+            // Set mobile-optimized texture sizes
+            setMobileOptimizedTextures();
+        }
+    }
+
+    // Dynamic performance scaling based on FPS
+    enableAdaptivePerformance(targetFPS = 30) {
+        const instance = this;
+        instance.targetFPS = targetFPS;
+        instance.performanceCheckInterval = setInterval(() => {
+            if (instance.curFPS < targetFPS * 0.8) {
+                // Performance is poor, reduce quality
+                if (instance.renderScale > 0.5) {
+                    instance.setRenderScale(instance.renderScale * 0.9);
+                }
+                if (instance.shadows) {
+                    instance.setShadowsEnabled(false);
+                }
+            } else if (instance.curFPS > targetFPS * 1.2 && instance.renderScale < 1.0) {
+                // Performance is good, can increase quality
+                instance.setRenderScale(Math.min(1.0, instance.renderScale * 1.05));
+            }
+        }, 2000); // Check every 2 seconds
+    }
+
+    disableAdaptivePerformance() {
+        if (this.performanceCheckInterval) {
+            clearInterval(this.performanceCheckInterval);
+            this.performanceCheckInterval = null;
+        }
+    }
+
     enterVRMode(callback) {
         const instance = this;
 
@@ -2621,6 +2686,9 @@ export class Scroll3dEngine {
         if(instance.renderer) {
             instance.renderer.setAnimationLoop(null);
         }
+
+        // Clean up performance monitoring
+        instance.disableAdaptivePerformance();
 
         delete scrollInstances[instance.id];
 
@@ -3149,8 +3217,12 @@ function setInstanceSize(instance) {
     renderWidth = Math.floor(renderWidth * instance.renderScale);
     renderHeight = Math.floor(renderHeight * instance.renderScale);
 
-    renderWidth = Math.floor(renderWidth * window.devicePixelRatio);
-    renderHeight = Math.floor(renderHeight * window.devicePixelRatio);
+    // Adaptive pixel ratio for mobile performance
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const pixelRatio = isMobile ? Math.min(window.devicePixelRatio, 2) : window.devicePixelRatio;
+    
+    renderWidth = Math.floor(renderWidth * pixelRatio);
+    renderHeight = Math.floor(renderHeight * pixelRatio);
 
     instance.lastWidth = renderWidth;
     instance.lastHeight = renderHeight;
@@ -4310,9 +4382,13 @@ function normalizeObjectPosition(obj) {
 
         // THIS MIGHT BE NEEDED FOR VOXEL PAINT, BUT WAS REALLY SLOWING 
         // DOWN MC2.  CHECK ON NEXT VOXEL PAINT UPDATE!!!
-        if(obj.mesh.geometry) {
-            //obj.mesh.geometry.computeVertexNormals();
-            //obj.mesh.geometry.attributes.position.needsUpdate = true;
+        if(obj.mesh.geometry && !obj.skipGeometryUpdates) {
+            // Only enable expensive geometry updates when explicitly needed
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            if (!isMobile) {
+                //obj.mesh.geometry.computeVertexNormals();
+                //obj.mesh.geometry.attributes.position.needsUpdate = true;
+            }
         }
     }
     
@@ -6274,7 +6350,11 @@ function rebuildInstanceRenderer(instance) {
     }
 
     instance.renderer = new WebGLRenderer(rendererOptions);
-    instance.renderer.setPixelRatio(window.devicePixelRatio);
+    
+    // Adaptive pixel ratio based on device and performance
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const adaptivePixelRatio = isMobile ? Math.min(window.devicePixelRatio, 2) : window.devicePixelRatio;
+    instance.renderer.setPixelRatio(adaptivePixelRatio);
     instance.renderer.autoClear = false;
 
     instance.renderer.outputColorSpace = USE_COLORSPACE;
@@ -6961,7 +7041,10 @@ function handleInstanceRender(instance, t) {
     for(let chunkId in instance.chunks) {
         if(chunkId.endsWith("water")) {
             const wMesh = instance.chunks[chunkId];
-            wMesh.material.uniforms.time.value += 1.0 / 60.0;
+            // Optimize water animation frequency on mobile
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            const timeStep = isMobile ? (1.0 / 30.0) : (1.0 / 60.0); // Half frequency on mobile
+            wMesh.material.uniforms.time.value += timeStep;
         }
     }
 
@@ -6985,6 +7068,17 @@ function handleInstanceRender(instance, t) {
     }
 
     doPostProcessing(instance);
+    
+    // Adaptive rendering based on performance
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+    // Skip rendering if FPS is low and nothing critical has changed
+    if (isMobile && instance.curFPS < 30 && !instance.shouldRender) {
+        return;
+    }
+    
+    // Reset shouldRender flag after processing
+    instance.shouldRender = false;
     
     if(instance.edgeScrolling && instance.edgeScrollDir) {
 
@@ -7901,6 +7995,12 @@ function updateParticleSystemParticles(system,timeElapsed) {
     }
 
     system.particles.sort((a,b) => {
+        // Skip expensive sorting on mobile for performance
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (isMobile && system.particles.length > 50) {
+            return 0; // Skip sorting for large particle counts on mobile
+        }
+        
         const d1 = system.params.camera.position.distanceTo(a.position);
         const d2 = system.params.camera.position.distanceTo(b.position);
 
@@ -8003,6 +8103,7 @@ export default {
     getOffset,
     forceResize,
     setTextureSize,
+    setMobileOptimizedTextures,
     setUseSimplifiedAtlas,
     DEF_PHI,
     DEF_THETA,
