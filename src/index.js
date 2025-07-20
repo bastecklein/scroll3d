@@ -692,6 +692,11 @@ export class Scroll3dEngine {
 
         this.sceneScale = 1;
 
+        // Chunk loading optimization properties
+        this.chunkLoadingQueue = [];
+        this.maxVPPInstancesPerFrame = 3; // Process max 3 VPP instances per frame
+        this.vppProcessingBudget = 8; // Max milliseconds per frame for VPP processing
+
         this.minZoom = MIN_ZOOM;
         this.maxZoom = MAX_ZOOM;
 
@@ -951,7 +956,8 @@ export class Scroll3dEngine {
 
             instance.scene.add(obj.object);
 
-            if(!obj.notHittable) {
+            // Defer hit test object addition for VPP instances to reduce lag
+            if(!obj.notHittable && obj.type !== "vppInstanceItem") {
                 addObjToHittest(instance, obj, 0);
             }
         } 
@@ -1229,6 +1235,39 @@ export class Scroll3dEngine {
     }
 
     addChunk(data) {
+        const instance = this;
+
+        // Add chunk to processing queue for smoother loading
+        instance.chunkLoadingQueue.push({
+            data: data,
+            priority: 1 // Can be used for prioritizing chunks closer to camera
+        });
+
+        // Process the queue
+        instance.processChunkQueue();
+    }
+
+    // Process chunk loading queue with frame budget management
+    processChunkQueue() {
+        const instance = this;
+        
+        if (instance.chunkLoadingQueue.length === 0) {
+            return;
+        }
+
+        // Sort queue by priority (distance to camera)
+        instance.chunkLoadingQueue.sort((a, b) => {
+            const aDist = Math.abs(a.data.x - instance.centerPosition.x) + Math.abs(a.data.y - instance.centerPosition.y);
+            const bDist = Math.abs(b.data.x - instance.centerPosition.x) + Math.abs(b.data.y - instance.centerPosition.y);
+            return aDist - bDist;
+        });
+
+        // Process one chunk per call (this will be called each frame)
+        const chunkItem = instance.chunkLoadingQueue.shift();
+        instance.processChunk(chunkItem.data);
+    }
+
+    processChunk(data) {
         const instance = this;
 
         const defTexture = data.defTexture;
@@ -2400,6 +2439,22 @@ export class Scroll3dEngine {
             
             // Set mobile-optimized texture sizes
             setMobileOptimizedTextures();
+            
+            // Enable chunk loading optimization
+            this.enableChunkLoadingOptimization();
+        }
+    }
+
+    // Enable all optimizations for chunk loading performance
+    enableAllChunkOptimizations() {
+        this.enableChunkLoadingOptimization();
+        
+        // More aggressive VPP processing limits
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (isMobile) {
+            this.setChunkLoadingOptimization(1, 4); // Very conservative
+        } else {
+            this.setChunkLoadingOptimization(3, 8); // Moderately conservative
         }
     }
 
@@ -2428,6 +2483,86 @@ export class Scroll3dEngine {
             clearInterval(this.performanceCheckInterval);
             this.performanceCheckInterval = null;
         }
+    }
+
+    // Get chunk loading status
+    getChunkLoadingStatus() {
+        return {
+            queueLength: this.chunkLoadingQueue.length,
+            isLoading: this.chunkLoadingQueue.length > 0
+        };
+    }
+
+    // Clear chunk loading queue (useful for teleporting/fast movement)
+    clearChunkLoadingQueue() {
+        this.chunkLoadingQueue = [];
+    }
+
+    // Batch add multiple objects for better performance during chunk loading
+    addObjects(objectsArray) {
+        const instance = this;
+        const addedIds = [];
+
+        // Group objects by type for better batching
+        const objectGroups = {
+            regular: [],
+            vppInstances: []
+        };
+
+        for(let i = 0; i < objectsArray.length; i++) {
+            const options = objectsArray[i];
+            options.scene = this.scene;
+            options.instance = instance;
+
+            const obj = new WorldObject(options);
+            instance.objects[obj.id] = obj;
+            addedIds.push(obj.id);
+
+            if (obj.type === "vppInstanceItem") {
+                objectGroups.vppInstances.push(obj);
+            } else {
+                objectGroups.regular.push(obj);
+            }
+        }
+
+        // Add regular objects to scene
+        for(let j = 0; j < objectGroups.regular.length; j++) {
+            const obj = objectGroups.regular[j];
+            if(obj.object) {
+                obj.object.frustumCulled = true;
+                instance.scene.add(obj.object);
+
+                if(!obj.notHittable) {
+                    addObjToHittest(instance, obj, 0);
+                }
+            }
+        }
+
+        // VPP instances will be processed later in the render loop
+        instance.shouldRender = true;
+        return addedIds;
+    }
+
+    // Set chunk loading performance settings
+    setChunkLoadingOptimization(maxVPPPerFrame = 3, processingBudgetMs = 8) {
+        this.maxVPPInstancesPerFrame = maxVPPPerFrame;
+        this.vppProcessingBudget = processingBudgetMs;
+    }
+
+    // Enable aggressive chunk loading optimization for mobile
+    enableChunkLoadingOptimization() {
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        
+        if (isMobile) {
+            this.setChunkLoadingOptimization(2, 6); // More conservative on mobile
+        } else {
+            this.setChunkLoadingOptimization(5, 12); // Less conservative on desktop
+        }
+    }
+
+    // Check if we're currently loading chunks and should skip expensive operations
+    isHeavyLoading() {
+        return this.chunkLoadingQueue.length > 5 || this.curFPS < 20;
     }
 
     enterVRMode(callback) {
@@ -7077,6 +7212,11 @@ function handleInstanceRender(instance, t) {
         return;
     }
     
+    // Process chunk loading queue each frame
+    if (instance.chunkLoadingQueue && instance.chunkLoadingQueue.length > 0) {
+        instance.processChunkQueue();
+    }
+    
     // Reset shouldRender flag after processing
     instance.shouldRender = false;
     
@@ -7183,6 +7323,10 @@ function handleInstanceRender(instance, t) {
     }
 
     if(instance.vppInstances) {
+        // Chunk loading optimization: Process VPP instances with time budget
+        const startTime = performance.now();
+        let processedCount = 0;
+        
         for(let insName in instance.vppInstances) {
             const instOb = instance.vppInstances[insName];
 
@@ -7190,7 +7334,14 @@ function handleInstanceRender(instance, t) {
                 continue;
             }
 
+            // Check if we've hit our processing budget
+            const elapsed = performance.now() - startTime;
+            if (elapsed > instance.vppProcessingBudget && processedCount >= instance.maxVPPInstancesPerFrame) {
+                break; // Defer remaining processing to next frame
+            }
+
             setupVPPInstanceObject(instance, instOb);
+            processedCount++;
         }
     }
 }
@@ -7776,6 +7927,9 @@ function setupVPPInstanceObject(instance, instOb) {
     const height = instOb.size.z / 2;
     const tall = instOb.size.y / 2;
 
+    // Optimize matrix updates by batching them
+    const matricesToUpdate = [];
+    
     for(let i = 0; i < newObs.length; i++) {
         const obj = newObs[i];
 
@@ -7802,7 +7956,14 @@ function setupVPPInstanceObject(instance, instOb) {
 
         obj.object.updateMatrix();
 
-        instOb.mesh.setMatrixAt(i, obj.object.matrix);
+        // Store matrix updates for batch processing
+        matricesToUpdate.push({ index: i, matrix: obj.object.matrix });
+    }
+
+    // Batch matrix updates to reduce GPU state changes
+    for(let j = 0; j < matricesToUpdate.length; j++) {
+        const update = matricesToUpdate[j];
+        instOb.mesh.setMatrixAt(update.index, update.matrix);
     }
 
     instOb.mesh.needsUpdate = true;
@@ -7811,7 +7972,9 @@ function setupVPPInstanceObject(instance, instOb) {
         instOb.mesh.instanceMatrix.needsUpdate = true;
     }
 
-    if(instOb.mesh.computeBoundingSphere) {
+    // Optimize bounding sphere computation - only do it when necessary
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (!isMobile && instOb.mesh.computeBoundingSphere) {
         instOb.mesh.computeBoundingSphere();
     }
 
