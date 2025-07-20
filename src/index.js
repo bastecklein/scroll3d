@@ -81,7 +81,7 @@ import { FilmPass } from "three/examples/jsm/postprocessing/FilmPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { GammaCorrectionShader } from "three/addons/shaders/GammaCorrectionShader.js";
 
-import { VPPLoader } from "vpploader";
+import { VPPLoader, VPPInstanceManager, VPPBatcher, generateLODGeometry } from "vpploader";
 import { renderPPP } from "ppp-tools";
 
 export const DEF_PHI = 75;
@@ -794,6 +794,10 @@ export class Scroll3dEngine {
         this.upCastDirection = new Vector3(0, 1, 0);
 
         this.vppInstances = {};
+        
+        // Initialize VPP optimization managers
+        this.vppInstanceManager = null; // Will be initialized when vppLoader is ready
+        this.vppBatcher = null;
 
         this.vrSession = null;
         this.classicADown = false;
@@ -1548,6 +1552,15 @@ export class Scroll3dEngine {
         }
 
         instance.vppInstances = {};
+        
+        // Clear VPP optimization managers when clearing instances
+        if(instance.vppInstanceManager) {
+            instance.vppInstanceManager.clear();
+        }
+        if(instance.vppBatcher) {
+            // VPPBatcher doesn't have clear method, reinitialize it
+            instance.vppBatcher = new VPPBatcher(vppLoader);
+        }
 
         clearOrientationViewer(instance);
     }
@@ -3344,6 +3357,10 @@ function initInstance(instance) {
     instance.scene.add(instance.vrCamHolder);
 
     rebuildInstanceRenderer(instance);
+    
+    // Initialize VPP optimization managers
+    instance.vppInstanceManager = new VPPInstanceManager(vppLoader);
+    instance.vppBatcher = new VPPBatcher(vppLoader);
 
     instance.vrCamHolder.position.set(
         instance.centerPosition.x + 20,
@@ -7216,26 +7233,8 @@ function handleInstanceRender(instance, t) {
     }
 
     if(instance.vppInstances) {
-        // Chunk loading optimization: Process VPP instances with time budget
-        const startTime = performance.now();
-        let processedCount = 0;
-        
-        for(let insName in instance.vppInstances) {
-            const instOb = instance.vppInstances[insName];
-
-            if(!instOb || instOb.loading || !instOb.changed || !instOb.rawMesh) {
-                continue;
-            }
-
-            // Check if we've hit our processing budget
-            const elapsed = performance.now() - startTime;
-            if (elapsed > instance.vppProcessingBudget && processedCount >= instance.maxVPPInstancesPerFrame) {
-                break; // Defer remaining processing to next frame
-            }
-
-            setupVPPInstanceObject(instance, instOb);
-            processedCount++;
-        }
+        // NEW OPTIMIZED: Use VPPInstanceManager for automatic instancing
+        processVPPInstancesOptimized(instance);
     }
 }
 
@@ -7747,6 +7746,174 @@ function handleInstanceGamepadScrolling(instance) {
 
     if(zoomax) {
         doZoom(instance, zoomax);
+    }
+}
+
+/**
+ * NEW OPTIMIZED: Process VPP instances using VPPInstanceManager for much better performance
+ * This replaces the custom instancing with vpploader's built-in optimization
+ */
+function processVPPInstancesOptimized(instance) {
+    const startTime = performance.now();
+    let processedChunks = 0;
+    
+    // Clear previous instances for rebuild
+    instance.vppInstanceManager.clear();
+    
+    // Group objects by VPP model for instancing
+    const vppGroups = new Map();
+    
+    for(let insName in instance.vppInstances) {
+        const instOb = instance.vppInstances[insName];
+        
+        if(!instOb || instOb.loading || !instOb.changed || !instOb.rawMesh) {
+            continue;
+        }
+        
+        // Check processing budget
+        const elapsed = performance.now() - startTime;
+        if (elapsed > instance.vppProcessingBudget && processedChunks >= instance.maxVPPInstancesPerFrame) {
+            break; // Defer to next frame
+        }
+        
+        // Extract VPP model data from rawMesh
+        const vppObj = instOb.rawMesh.userData.vppObj || instOb.vppObj;
+        
+        if(!vppObj) {
+            // Fallback to old system if no VPP data
+            setupVPPInstanceObject(instance, instOb);
+            processedChunks++;
+            continue;
+        }
+        
+        // Calculate chunk distance from camera for LOD
+        const chunkCenter = instOb.box ? instOb.box.getCenter(new Vector3()) : new Vector3();
+        const cameraPos = instance.camera.position;
+        const distance = cameraPos.distanceTo(chunkCenter);
+        
+        // Use LOD for distant chunks (30-70% GPU load reduction according to performance guide)
+        const useLOD = distance > 50; // Adjust threshold as needed
+        
+        // Group instances by model + LOD level
+        const modelKey = JSON.stringify(vppObj) + (useLOD ? '_LOD' : '');
+        if(!vppGroups.has(modelKey)) {
+            vppGroups.set(modelKey, {
+                vppObj: vppObj,
+                instances: [],
+                instOb: instOb,
+                useLOD: useLOD
+            });
+        }
+        
+        // Add all object instances for this model
+        const group = vppGroups.get(modelKey);
+        for(let i = 0; i < instOb.items.length; i++) {
+            const itemId = instOb.items[i];
+            const obj = instance.objects[itemId];
+            
+            if(!obj || obj.isDisposed) {
+                continue;
+            }
+            
+            // Use LOD geometry for distant chunks if available
+            const processedVppObj = useLOD ? 
+                generateLODGeometry(vppObj, 0.5) : vppObj; // 50% detail reduction for LOD
+            
+            // Add to VPPInstanceManager
+            instance.vppInstanceManager.addInstance(processedVppObj, {
+                x: obj.x * 2,
+                y: obj.z * 2, // Note: z->y coordinate transformation
+                z: obj.y * 2,
+                rotation: obj.rot ? { y: obj.rot * Math.PI / 180 } : undefined,
+                scale: obj.scale !== 1 ? { x: obj.scale, y: obj.scale, z: obj.scale } : undefined
+            }, {
+                colorReplacements: obj.color ? [{ from: "#ff00ff", to: obj.color }] : [],
+                scale: obj.scale || 1
+            });
+        }
+        
+        // Clean up old mesh from scene
+        if(instOb.mesh && instOb.mesh.parent) {
+            instance.scene.remove(instOb.mesh);
+        }
+        
+        instOb.changed = false;
+        processedChunks++;
+    }
+    
+    // Generate all instanced meshes at once
+    if(vppGroups.size > 0) {
+        // ADAPTIVE OPTIMIZATION: Use batching for chunks with many different models (50-80% draw call reduction)
+        // Use instancing for chunks with repeated models (80-95% draw call reduction)
+        const uniqueModels = vppGroups.size;
+        const useBatching = uniqueModels > 10; // Threshold: batch if more than 10 different models
+        
+        if(useBatching) {
+            // Use VPPBatcher for chunks with many different models
+            console.log(`VPP Optimization: Using batching for ${uniqueModels} different models`);
+            for(const [, group] of vppGroups) {
+                for(let i = 0; i < group.instOb.items.length; i++) {
+                    const itemId = group.instOb.items[i];
+                    const obj = instance.objects[itemId];
+                    
+                    if(!obj || obj.isDisposed) continue;
+                    
+                    const processedVppObj = group.useLOD ? 
+                        generateLODGeometry(group.vppObj, 0.5) : group.vppObj;
+                    
+                    instance.vppBatcher.addModel(processedVppObj, {
+                        x: obj.x * 2,
+                        y: obj.z * 2,
+                        z: obj.y * 2
+                    }, {
+                        colorReplacements: obj.color ? [{ from: "#ff00ff", to: obj.color }] : [],
+                        scale: obj.scale || 1
+                    });
+                }
+            }
+            
+            // Generate batched geometries
+            instance.vppBatcher.generateBatches().then(batches => {
+                const batchTime = performance.now() - startTime;
+                console.log(`VPP Batching completed in ${batchTime.toFixed(2)}ms, created ${batches.length} batches`);
+                for(const batch of batches) {
+                    const mesh = new Mesh(batch.geometry, batch.material);
+                    mesh.castShadow = true;
+                    mesh.receiveShadow = true;
+                    instance.scene.add(mesh);
+                }
+            }).catch(error => {
+                console.warn("VPPBatcher failed, using instancing:", error);
+                // Fallback to instancing
+                generateInstancedMeshes();
+            });
+        } else {
+            // Use VPPInstanceManager for chunks with repeated models
+            console.log(`VPP Optimization: Using instancing for ${uniqueModels} different models with repetition`);
+            generateInstancedMeshes();
+        }
+        
+        function generateInstancedMeshes() {
+            instance.vppInstanceManager.generateInstancedMeshes().then(meshes => {
+                const instanceTime = performance.now() - startTime;
+                console.log(`VPP Instancing completed in ${instanceTime.toFixed(2)}ms, created ${meshes.length} instanced meshes`);
+                // Add new optimized meshes to scene
+                for(const mesh of meshes) {
+                    mesh.castShadow = true;
+                    mesh.receiveShadow = true;
+                    instance.scene.add(mesh);
+                }
+            }).catch(error => {
+                console.warn("VPPInstanceManager failed, falling back to old system:", error);
+                // Fallback to old processing if needed
+                for(let insName in instance.vppInstances) {
+                    const instOb = instance.vppInstances[insName];
+                    if(instOb && instOb.changed) {
+                        setupVPPInstanceObject(instance, instOb);
+                    }
+                }
+            });
+        }
     }
 }
 
