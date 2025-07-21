@@ -7237,9 +7237,7 @@ function handleInstanceRender(instance, t) {
     }
 
     if(instance.vppInstances) {
-        // TEST: Try optimizeGeometry only with extensive validation
-        console.log("DEBUG: Testing optimizeGeometry with validation");
-        processVPPInstancesWithGeometryOptimization(instance);
+        processVPPInstancesOld(instance);
     }
 }
 
@@ -7755,96 +7753,6 @@ function handleInstanceGamepadScrolling(instance) {
 }
 
 /**
- * TEST: Only optimizeGeometry with extensive validation
- */
-function processVPPInstancesWithGeometryOptimization(instance) {
-    console.log("DEBUG: Testing optimizeGeometry only");
-    const startTime = performance.now();
-    let processedCount = 0;
-    
-    for(let insName in instance.vppInstances) {
-        const instOb = instance.vppInstances[insName];
-
-        if(!instOb || instOb.loading || !instOb.changed || !instOb.rawMesh) {
-            continue;
-        }
-
-        // Check processing budget
-        const elapsed = performance.now() - startTime;
-        if (elapsed > instance.vppProcessingBudget && processedCount >= instance.maxVPPInstancesPerFrame) {
-            break;
-        }
-
-        console.log("DEBUG: Testing geometry optimization on", insName);
-        
-        // Log original geometry details
-        const originalGeometry = instOb.rawMesh.geometry;
-        console.log("DEBUG: Original geometry:", {
-            hasPosition: !!originalGeometry.getAttribute('position'),
-            positionCount: originalGeometry.getAttribute('position')?.count,
-            hasNormal: !!originalGeometry.getAttribute('normal'),
-            hasColor: !!originalGeometry.getAttribute('color'),
-            hasIndex: !!originalGeometry.index,
-            indexCount: originalGeometry.index?.count
-        });
-
-        // TEST: Try optimizeGeometry with validation
-        if(optimizeGeometry && originalGeometry) {
-            try {
-                console.log("DEBUG: Calling optimizeGeometry...");
-                const optimizedGeometry = optimizeGeometry(originalGeometry);
-                
-                console.log("DEBUG: optimizeGeometry returned:", {
-                    isNull: optimizedGeometry === null,
-                    isUndefined: optimizedGeometry === undefined,
-                    isSameObject: optimizedGeometry === originalGeometry,
-                    type: typeof optimizedGeometry,
-                    hasPosition: optimizedGeometry && !!optimizedGeometry.getAttribute('position'),
-                    positionCount: optimizedGeometry && optimizedGeometry.getAttribute('position')?.count,
-                    positionArray: optimizedGeometry && optimizedGeometry.getAttribute('position')?.array?.length
-                });
-                
-                if(optimizedGeometry && optimizedGeometry !== originalGeometry) {
-                    // Validate the optimized geometry thoroughly
-                    const posAttr = optimizedGeometry.getAttribute('position');
-                    if(!posAttr) {
-                        console.error("DEBUG: Optimized geometry missing position attribute!");
-                    } else if(!posAttr.array) {
-                        console.error("DEBUG: Optimized geometry position attribute missing array!");
-                    } else if(posAttr.array.length === 0) {
-                        console.error("DEBUG: Optimized geometry position array is empty!");
-                    } else {
-                        console.log("DEBUG: Optimized geometry validation PASSED, applying...");
-                        
-                        // Make sure bounding data is computed
-                        optimizedGeometry.computeBoundingSphere();
-                        optimizedGeometry.computeBoundingBox();
-                        
-                        // Apply the optimized geometry
-                        instOb.rawMesh.geometry = optimizedGeometry;
-                        console.log("DEBUG: Applied optimized geometry successfully to", insName);
-                    }
-                } else {
-                    console.log("DEBUG: No optimization applied (same geometry or null returned)");
-                }
-                
-            } catch(error) {
-                console.error("DEBUG: optimizeGeometry threw error:", error);
-            }
-        } else {
-            console.log("DEBUG: optimizeGeometry not available or no geometry");
-        }
-
-        // Use the regular setup function
-        setupVPPInstanceObject(instance, instOb);
-        processedCount++;
-    }
-    
-    const totalTime = performance.now() - startTime;
-    console.log(`DEBUG: Geometry optimization test completed in ${totalTime.toFixed(2)}ms, processed ${processedCount} chunks`);
-}
-
-/**
  * WORKING OPTIMIZED: Enhanced VPP processing with real performance optimizations
  * Uses actual vpploader functions and smart instancing strategies
  */
@@ -7960,7 +7868,7 @@ function getGeometryHash(geometry) {
  * OLD VPP processing system as fallback
  */
 function processVPPInstancesOld(instance) {
-    console.log("DEBUG: Using old VPP processing system");
+
     const startTime = performance.now();
     let processedCount = 0;
     
