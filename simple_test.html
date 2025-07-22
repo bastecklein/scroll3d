@@ -23,12 +23,30 @@
 
         const engine = getInstance(document.getElementById('container'));
 
-        // Simple chunk data
+        // Add lighting so we can see the geometry better
+        engine.addObject({
+            type: "ambientLight",
+            color: "#404040",
+            intensity: 0.4
+        });
+
+        engine.addObject({
+            type: "directionalLight", 
+            color: "#ffffff",
+            intensity: 0.8,
+            x: 10,
+            y: 10,
+            z: 5
+        });
+
+        // Create chunk data with multiple blocks to see the difference
         const createChunk = () => ({
             x: 0, y: 0,
             data: [
-                [null, null],
-                [null, { z: 1, top: "#4CAF50" }]
+                [{ z: 1, top: "#4CAF50" }, { z: 2, top: "#2196F3" }, null, null],
+                [{ z: 1, top: "#FF9800" }, { z: 1, top: "#9C27B0" }, null, null],
+                [null, null, null, null],
+                [null, null, null, { z: 1, top: "#F44336" }]
             ],
             defTexture: {
                 top: "#888",

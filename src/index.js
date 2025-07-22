@@ -5052,25 +5052,53 @@ function getTextureIndex(options,chunkData,instance) {
 }
 
 /**
- * Generates rounded corner geometry for a face based on rounding parameters.
- * 
- * This implementation creates a chamfered/beveled corner effect by:
- * 1. Creating an inset version of the original face (shrunk toward center)
- * 2. Adding corner chamfer triangles that connect the inset edges to original corners
- * 3. This reduces the harsh 90-degree angles and creates smoother transitions
- * 
+ * Determines if a face should have rounded corners based on neighboring blocks
+ * @param {Object} data - Chunk data
+ * @param {number} x - X position in chunk  
+ * @param {number} y - Y height level
+ * @param {number} z - Z position in chunk
+ * @param {Array} dir - Face direction vector [x,y,z]
+ * @returns {boolean} True if this face should be rounded
+ */
+function shouldRoundFace(data, x, y, z, dir) {
+    // Check if this face is on the exterior edge of the chunk where rounding would be visible
+    
+    // Get the neighboring position for this face
+    const nx = x + dir[0];
+    const ny = y + dir[1]; 
+    const nz = z + dir[2];
+    
+    // If neighbor is outside chunk bounds, this is an exterior face
+    if (nx < 0 || nx >= data.data.length || nz < 0 || nz >= data.data.length) {
+        return true;
+    }
+    
+    // Check if there's a neighboring block that would hide this face
+    const neighbor = getChunkTileNeighbor(data.data, nx, ny, nz, false);
+    
+    // If no neighbor block, this face is exposed and should be rounded
+    return !neighbor || neighbor === -1;
+}
+
+/**
+ * Generates rounded corner geometry for a face with proper UV mapping
  * @param {Array} corners - Original corner positions [{pos: [x,y,z], uv: [u,v]}, ...]
  * @param {Object} roundingOptions - Options for rounding {enabled, radius, segments}
  * @param {Array} dir - Face direction vector for normal calculation [x,y,z]
  * @returns {Object} Object with vertices and indices arrays
  */
 function generateRoundedCorners(corners, roundingOptions, dir) {
-    const { radius = 0.15, segments = 4 } = roundingOptions;
+    const { radius = 0.15 } = roundingOptions;
     const vertices = [];
     const indices = [];
     
-    // Create a chamfered/beveled corner effect by shrinking the face
-    // and adding corner triangles to create smoother transitions
+    if (corners.length !== 4) {
+        // Fallback to original corners if not a quad
+        return { vertices: corners, indices: [0, 1, 2, 2, 1, 3] };
+    }
+    
+    // Create a simple chamfered corner by slightly insetting the face
+    const insetFactor = radius * 0.5; // More conservative insetting
     
     const cornerPositions = corners.map(corner => corner.pos);
     const cornerUVs = corners.map(corner => corner.uv);
@@ -5086,63 +5114,24 @@ function generateRoundedCorners(corners, roundingOptions, dir) {
     center[1] /= corners.length;
     center[2] /= corners.length;
     
-    // Create inset vertices (corners moved toward center)
-    const insetVertices = [];
-    const cornerVertices = [];
-    
+    // Create slightly inset vertices with proper UV interpolation
     for (let i = 0; i < corners.length; i++) {
         const pos = cornerPositions[i];
         const uv = cornerUVs[i];
         
-        // Calculate direction from center to corner
-        const toCorner = [
-            pos[0] - center[0],
-            pos[1] - center[1],
-            pos[2] - center[2]
-        ];
-        
-        // Normalize and scale by radius
-        const length = Math.sqrt(toCorner[0] * toCorner[0] + toCorner[1] * toCorner[1] + toCorner[2] * toCorner[2]);
-        if (length > 0) {
-            const scale = Math.max(0, (length - radius) / length);
-            toCorner[0] *= scale;
-            toCorner[1] *= scale;
-            toCorner[2] *= scale;
-        }
-        
-        // Create inset position
+        // Move corner slightly toward center
         const insetPos = [
-            center[0] + toCorner[0],
-            center[1] + toCorner[1],
-            center[2] + toCorner[2]
+            pos[0] + (center[0] - pos[0]) * insetFactor,
+            pos[1] + (center[1] - pos[1]) * insetFactor,
+            pos[2] + (center[2] - pos[2]) * insetFactor
         ];
         
-        insetVertices.push({ pos: insetPos, uv: uv });
-        cornerVertices.push({ pos: pos, uv: uv });
+        // Keep original UV coordinates for proper texture mapping
+        vertices.push({ pos: insetPos, uv: uv });
     }
     
-    // Add inset vertices to main face
-    vertices.push(...insetVertices);
-    
-    // Add triangles for the main inset face
-    if (corners.length === 4) {
-        // Quad face
-        indices.push(0, 1, 2, 2, 1, 3);
-        
-        // Add corner chamfer triangles for each edge
-        for (let i = 0; i < 4; i++) {
-            const next = (i + 1) % 4;
-            const baseIdx = vertices.length;
-            
-            // Add original corner vertices for this edge
-            vertices.push(cornerVertices[i]);
-            vertices.push(cornerVertices[next]);
-            
-            // Create triangle connecting inset edge to original corner
-            indices.push(i, next, baseIdx);
-            indices.push(next, baseIdx + 1, baseIdx);
-        }
-    }
+    // Create two triangles for the quad face
+    indices.push(0, 1, 2, 2, 1, 3);
     
     return { vertices, indices };
 }
@@ -5411,9 +5400,9 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                             ndx + 2, ndx + 1, ndx + 3
                         );
                     } else {
-                        // Check if rounded corners are enabled
-                        if(roundedCorners && roundedCorners.enabled) {
-                            // Use rounded corner geometry
+                        // Check if rounded corners are enabled AND this face should be rounded
+                        if(roundedCorners && roundedCorners.enabled && shouldRoundFace(data, x, y, z, dir)) {
+                            // Use rounded corner geometry for exterior faces only
                             const roundedGeometry = generateRoundedCorners(usecor, roundedCorners, dir);
                             
                             for (const vertex of roundedGeometry.vertices) {
@@ -5447,7 +5436,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                                 indices.push(ndx + roundedGeometry.indices[i]);
                             }
                         } else {
-                            // Use regular sharp corner geometry
+                            // Use regular sharp corner geometry for interior faces or when rounding disabled
                             for (const {pos, uv} of usecor) {
                                 positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
                                 normals.push(...dir);

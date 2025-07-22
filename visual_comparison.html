@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Rounded Corners Visual Test</title>
+    <style>
+        body { margin: 0; background: #222; color: white; font-family: Arial; }
+        .container { display: flex; gap: 20px; padding: 20px; }
+        .viewer { width: 400px; height: 400px; border: 1px solid #666; }
+        .controls { text-align: center; margin: 10px 0; }
+        button { margin: 5px; padding: 8px 16px; background: #444; color: white; border: none; cursor: pointer; }
+        button:hover { background: #555; }
+        h3 { text-align: center; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Rounded Corners Visual Comparison</h1>
+    <div class="container">
+        <div>
+            <h3>Sharp Corners (Original)</h3>
+            <div id="container1" class="viewer"></div>
+            <div class="controls">
+                <button onclick="updateSharp()">Refresh Sharp</button>
+            </div>
+        </div>
+        <div>
+            <h3>Rounded Corners (New Feature)</h3>
+            <div id="container2" class="viewer"></div>
+            <div class="controls">
+                <button onclick="updateRounded()">Refresh Rounded</button>
+                <button onclick="updateRoundedLarge()">Large Radius</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { getInstance } from './src/index.js';
+
+        // Create two engine instances for side-by-side comparison
+        const engine1 = getInstance(document.getElementById('container1'), {
+            cameraMode: 2,
+            phi: 45,
+            theta: 30,
+            radius: 15
+        });
+
+        const engine2 = getInstance(document.getElementById('container2'), {
+            cameraMode: 2,
+            phi: 45,
+            theta: 30,
+            radius: 15
+        });
+
+        // Add identical lighting to both
+        [engine1, engine2].forEach(engine => {
+            engine.addObject({
+                type: "ambientLight",
+                color: "#404040",
+                intensity: 0.4
+            });
+
+            engine.addObject({
+                type: "directionalLight",
+                color: "#ffffff",
+                intensity: 0.8,
+                x: 10,
+                y: 10,
+                z: 5
+            });
+        });
+
+        // Create test chunk with isolated blocks to show exterior corner rounding
+        const createTestChunk = () => ({
+            x: 0, y: 0,
+            data: [
+                [{ z: 2, top: "#4CAF50" }, null, null, { z: 1, top: "#F44336" }],
+                [null, null, null, null],
+                [null, null, { z: 3, top: "#2196F3" }, null],
+                [{ z: 1, top: "#FF9800" }, null, null, { z: 2, top: "#9C27B0" }]
+            ],
+            defTexture: {
+                top: "#888",
+                middle: "#666",
+                noise: false
+            }
+        });
+
+        window.updateSharp = () => {
+            engine1.removeChunk(0, 0);
+            engine1.addChunk(createTestChunk());
+        };
+
+        window.updateRounded = () => {
+            engine2.removeChunk(0, 0);
+            engine2.addChunk(createTestChunk(), {
+                enabled: true,
+                radius: 0.15
+            });
+        };
+
+        window.updateRoundedLarge = () => {
+            engine2.removeChunk(0, 0);
+            engine2.addChunk(createTestChunk(), {
+                enabled: true,
+                radius: 0.3
+            });
+        };
+
+        // Initialize both views
+        updateSharp();
+        updateRounded();
+    </script>
+</body>
+</html>
