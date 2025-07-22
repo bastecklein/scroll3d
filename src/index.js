@@ -9,7 +9,6 @@
 import { guid, removeFromArray, hexToRGB, rgbToHex, hash, randomIntFromInterval, distBetweenPoints } from "common-helpers";
 import { handleInput } from "input-helper";
 import GPH from "gamepadhelper";
-import { CanvasTextureManager } from "./CanvasTextureManager.js";
 
 import {
     AdditiveBlending,
@@ -545,6 +544,8 @@ const PARTICLE_FRAGMENT_SHADER = `
 
 const AXIS_DEADZONE = 0.25;
 
+let tileTextures = {};
+
 let commonMaterials = {};
 let scrollInstances = {};
 let commonSpriteGeos = {};
@@ -643,6 +644,7 @@ export function setTextureSize(size) {
     curAtlasIndex = 0;
     textureAtlas = {};
     curAtlasTexture = null;
+    tileTextures = {};
 
     resetAtlasTexture();
 }
@@ -709,6 +711,7 @@ export class Scroll3dEngine {
         this.lastFPS = [TARGET_FPS];
 
         this.sunSphere = null;
+        this.chunkMode = options.chunkMode || "legacy";
 
         this.useVRControllerGrips = options.useVRControllerGrips || true;
 
@@ -800,10 +803,6 @@ export class Scroll3dEngine {
         this.vppInstanceManager = null; // Will be initialized when vppLoader is ready
         this.vppBatcher = null;
         this.vppModelCache = new Map(); // Cache for VPP model geometries
-
-        // Canvas texture manager for dynamic chunk textures
-        this.canvasTextureManager = null; // Will be initialized when needed
-        this.useCanvasTextures = options.useCanvasTextures || false;
 
         this.vrSession = null;
         this.classicADown = false;
@@ -924,6 +923,11 @@ export class Scroll3dEngine {
 
     resize() {
         setInstanceSize(this);
+    }
+
+    setChunkMode(mode) {
+        this.chunkMode = mode;
+        this.shouldRender = true;
     }
 
     setTouchPadMode(mode, leftStick = true, rightStick = true, buttons = null) {
@@ -1245,12 +1249,11 @@ export class Scroll3dEngine {
     addChunk(data) {
         const instance = this;
 
-        // Check if we should use canvas textures
-        if (instance.useCanvasTextures) {
-            return instance.addChunkCanvas(data);
+        if(instance.chunkMode == "canvas") {
+            addCanvasChunk(instance, data);
+            return;
         }
 
-        // Original atlas-based implementation
         const defTexture = data.defTexture;
 
         const positions = [];
@@ -1397,161 +1400,6 @@ export class Scroll3dEngine {
 
             instance.waterPlane.material.uniforms.tDudv.value = instance.waterTexture;
 
-            instance.waterPlane.position.set(instance.centerPosition.x * 2, 1.8, instance.centerPosition.y);
-            instance.waterPlane.rotation.x = - π * 0.5;
-
-            instance.scene.add(instance.waterPlane);
-            instance.hitTestObjects.push(instance.waterPlane);
-        }
-    }
-
-    /*
-        if(hasWater && instance.waterTexture && !instance.waterPlane) {
-
-            if(!instance.waterGeometry) {
-                instance.waterGeometry = new PlaneGeometry(256, 256);
-            }
-
-            instance.waterPlane = new Refractor(instance.waterGeometry, {
-                color: waterColor,
-                textureWidth: 1024, 
-                textureHeight: 1024,
-                shader: WaterRefractionShader,
-                depthTest: true,
-                depthWrite: false
-            });
-
-            instance.waterPlane.material.uniforms.tDudv.value = instance.waterTexture;
-
-            instance.waterPlane.position.set(instance.centerPosition.x * 2, 1.8, instance.centerPosition.y);
-            instance.waterPlane.rotation.x = - π * 0.5;
-
-            instance.scene.add(instance.waterPlane);
-            instance.hitTestObjects.push(instance.waterPlane);
-        }
-    }*/
-
-    async addChunkCanvas(data) {
-        const instance = this;
-
-        // Initialize canvas texture manager if not already done
-        if (!instance.canvasTextureManager) {
-            instance.canvasTextureManager = new CanvasTextureManager(
-                instance.chunkSize,
-                64 // tile size in pixels - adjust based on desired resolution
-            );
-        }
-
-        const positions = [];
-        const normals = [];
-        const uvs = [];
-        const indices = [];
-
-        let hasWater = false;
-        let waterColor = "#03A9F4";
-
-        // Generate geometry for the chunk using canvas UV mapping
-        for(let x = 0; x < data.data.length; x++) {
-            for(let z = 0; z < data.data.length; z++) {
-                const obj = data.data[x][z];
-
-                if(!obj) {
-                    continue;
-                }
-
-                const result = addChunkObPartCanvas(instance, obj, data, x, z, positions, normals, uvs, indices, waterColor, hasWater);
-
-                if(result && result.hasWater) {
-                    hasWater = true;
-                }
-
-                if(result && result.waterColor) {
-                    waterColor = result.waterColor;
-                }
-            }
-        }
-
-        let rOrder = "0";
-        if(data.rOrder) {
-            rOrder = data.rOrder;
-        }
-
-        try {
-            // Generate the canvas texture for this chunk
-            const canvasTexture = await instance.canvasTextureManager.generateChunkTexture(data);
-            
-            const cellgeo = new BufferGeometry();
-
-            const positionNumComponents = 3;
-            const normalNumComponents = 3;
-            const uvNumComponents = 2;
-            
-            cellgeo.setAttribute(
-                "position",
-                new BufferAttribute(new Float32Array(positions), positionNumComponents));
-
-            cellgeo.setAttribute(
-                "normal",
-                new BufferAttribute(new Float32Array(normals), normalNumComponents));
-
-            cellgeo.setAttribute(
-                "uv",
-                new BufferAttribute(new Float32Array(uvs), uvNumComponents));
-
-            cellgeo.setIndex(indices);
-
-            cellgeo.scale(2, 2, 2);
-
-            cellgeo.normalsNeedUpdate = true;
-            cellgeo.computeVertexNormals();
-
-            // Create material with the generated canvas texture
-            const material = new MeshLambertMaterial({
-                map: canvasTexture,
-                transparent: false
-            });
-
-            const mesh = new Mesh(cellgeo, material);
-
-            const meshX = (data.x * instance.chunkSize) * 2;
-            const meshY = (data.y * instance.chunkSize) * 2;
-
-            mesh.position.set(meshX, 0, meshY);
-            mesh.receiveShadow = true;
-
-            const chunkId = data.x + ":" + data.y + ":" + rOrder;
-
-            instance.removeChunk(data.x, data.y, rOrder, 500);
-
-            instance.chunks[chunkId] = mesh;
-
-            instance.scene.add(mesh);
-            instance.hitTestObjects.push(mesh);
-
-            clearAllParticleSystems(instance);
-        } catch (error) {
-            console.error('Failed to generate chunk texture:', error);
-            // Fallback to original method
-            this.useCanvasTextures = false;
-            return this.addChunk(data);
-        }
-
-        // Water handling remains the same
-        if(hasWater && instance.waterTexture && !instance.waterPlane) {
-            if(!instance.waterGeometry) {
-                instance.waterGeometry = new PlaneGeometry(256, 256);
-            }
-
-            instance.waterPlane = new Refractor(instance.waterGeometry, {
-                color: waterColor,
-                textureWidth: 1024, 
-                textureHeight: 1024,
-                shader: WaterRefractionShader,
-                depthTest: true,
-                depthWrite: false
-            });
-
-            instance.waterPlane.material.uniforms.tDudv.value = instance.waterTexture;
             instance.waterPlane.position.set(instance.centerPosition.x * 2, 1.8, instance.centerPosition.y);
             instance.waterPlane.rotation.x = - π * 0.5;
 
@@ -2624,53 +2472,6 @@ export class Scroll3dEngine {
         }
     }
 
-    // Enable or disable canvas-based texture generation
-    setCanvasTextureMode(enabled, tileResolution = 64) {
-        const instance = this;
-        
-        if (enabled) {
-            if (!instance.canvasTextureManager) {
-                instance.canvasTextureManager = new CanvasTextureManager(
-                    instance.chunkSize,
-                    tileResolution
-                );
-            }
-            instance.useCanvasTextures = true;
-        } else {
-            if (instance.canvasTextureManager) {
-                instance.canvasTextureManager.dispose();
-                instance.canvasTextureManager = null;
-            }
-            instance.useCanvasTextures = false;
-        }
-    }
-
-    // Check if canvas texture mode is enabled
-    isCanvasTextureModeEnabled() {
-        return this.useCanvasTextures && this.canvasTextureManager;
-    }
-
-    // Enable or disable canvas-based texture generation
-    setCanvasTextureMode(enabled, tileResolution = 64) {
-        const instance = this;
-        
-        if (enabled) {
-            if (!instance.canvasTextureManager) {
-                instance.canvasTextureManager = new CanvasTextureManager(
-                    instance.chunkSize,
-                    tileResolution
-                );
-            }
-            instance.useCanvasTextures = true;
-        } else {
-            if (instance.canvasTextureManager) {
-                instance.canvasTextureManager.dispose();
-                instance.canvasTextureManager = null;
-            }
-            instance.useCanvasTextures = false;
-        }
-    }
-
 
 
 
@@ -2945,12 +2746,6 @@ export class Scroll3dEngine {
 
         // Clean up performance monitoring
         instance.disableAdaptivePerformance();
-
-        // Clean up canvas texture manager
-        if(instance.canvasTextureManager) {
-            instance.canvasTextureManager.dispose();
-            instance.canvasTextureManager = null;
-        }
 
         delete scrollInstances[instance.id];
 
@@ -8510,161 +8305,6 @@ function calculateCurrentFPS(instance) {
     if(instance.lastFPS.length > 100) {
         instance.lastFPS.shift();
     }
-}
-
-// Canvas-based chunk part generation function
-function addChunkObPartCanvas(instance, obj, data, x, z, positions, normals, uvs, indices, waterColor, hasWater) {
-    let floorZ = 0;
-
-    if(!obj.isWater) {
-        obj.isWater = false;
-    }
-
-    if(obj.z) {
-        floorZ = obj.z;
-    }
-
-    // Calculate UV coordinates for canvas texture mapping
-    // Each tile gets a specific area of the canvas texture
-    const chunkSize = instance.chunkSize;
-    const uvX = x / chunkSize;        // Left edge of tile in UV space (0-1)
-    const uvZ = z / chunkSize;        // Top edge of tile in UV space (0-1)
-    const uvSize = 1 / chunkSize;     // Size of each tile in UV space
-
-    // The key insight: each tile occupies exactly uvSize x uvSize area in the canvas
-    // At position (uvX, uvZ) to (uvX + uvSize, uvZ + uvSize)
-
-    let y = floorZ;
-
-    // Generate cube faces with proper UV mapping to canvas areas
-    // This replicates your existing face generation but with canvas UVs
-
-    // Handle different cube face orientations
-    const faceData = getCubeFaceData();
-    
-    // For each face of the cube that should be visible
-    const visibleFaces = determineVisibleFaces(obj, data, x, z);
-    
-    for (const faceName of visibleFaces) {
-        const face = faceData[faceName];
-        const ndx = positions.length / 3;
-
-        // Add vertices for this face
-        for (const {pos, uv} of face) {
-            positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
-            normals.push(...getFaceNormal(faceName));
-
-            // Map UV coordinates to canvas texture
-            // For canvas textures, we map each tile to its specific canvas area
-            let canvasU, canvasV;
-            
-            if (faceName === 'top') {
-                // Top face uses the tile's specific area in canvas
-                canvasU = uvX + (uv[0] * uvSize);
-                canvasV = uvZ + (uv[1] * uvSize);
-            } else {
-                // Side faces can reuse the same texture area or use different areas
-                // For now, let's use the same area as the top face
-                canvasU = uvX + (uv[0] * uvSize);
-                canvasV = uvZ + (uv[1] * uvSize);
-            }
-
-            uvs.push(canvasU, canvasV);
-        }
-
-        // Add indices for the face (two triangles)
-        indices.push(
-            ndx, ndx + 1, ndx + 2,
-            ndx + 2, ndx + 1, ndx + 3
-        );
-    }
-
-    return {
-        hasWater: obj.isWater || false,
-        waterColor: obj.waterColor || waterColor
-    };
-}
-
-// Helper function to get cube face data (simplified version of your existing system)
-function getCubeFaceData() {
-    return {
-        top: [
-            { pos: [0, 1, 1], uv: [0, 0] },
-            { pos: [1, 1, 1], uv: [1, 0] },
-            { pos: [1, 1, 0], uv: [1, 1] },
-            { pos: [0, 1, 0], uv: [0, 1] }
-        ],
-        bottom: [
-            { pos: [0, 0, 0], uv: [0, 0] },
-            { pos: [1, 0, 0], uv: [1, 0] },
-            { pos: [1, 0, 1], uv: [1, 1] },
-            { pos: [0, 0, 1], uv: [0, 1] }
-        ],
-        front: [
-            { pos: [0, 0, 1], uv: [0, 0] },
-            { pos: [1, 0, 1], uv: [1, 0] },
-            { pos: [1, 1, 1], uv: [1, 1] },
-            { pos: [0, 1, 1], uv: [0, 1] }
-        ],
-        back: [
-            { pos: [1, 0, 0], uv: [0, 0] },
-            { pos: [0, 0, 0], uv: [1, 0] },
-            { pos: [0, 1, 0], uv: [1, 1] },
-            { pos: [1, 1, 0], uv: [0, 1] }
-        ],
-        left: [
-            { pos: [0, 0, 0], uv: [0, 0] },
-            { pos: [0, 0, 1], uv: [1, 0] },
-            { pos: [0, 1, 1], uv: [1, 1] },
-            { pos: [0, 1, 0], uv: [0, 1] }
-        ],
-        right: [
-            { pos: [1, 0, 1], uv: [0, 0] },
-            { pos: [1, 0, 0], uv: [1, 0] },
-            { pos: [1, 1, 0], uv: [1, 1] },
-            { pos: [1, 1, 1], uv: [0, 1] }
-        ]
-    };
-}
-
-// Helper function to determine which faces should be visible
-function determineVisibleFaces(obj, data, x, z) {
-    const faces = ['top']; // Always show top face
-    
-    // Add side faces if this tile has height
-    if (obj.z && obj.z > 0) {
-        // Check neighboring tiles to determine which side faces to show
-        const neighbors = {
-            front: data.data[x] && data.data[x][z + 1],
-            back: data.data[x] && data.data[x][z - 1],
-            left: data.data[x - 1] && data.data[x - 1][z],
-            right: data.data[x + 1] && data.data[x + 1][z]
-        };
-
-        // Show face if neighbor is lower or doesn't exist
-        if (!neighbors.front || (neighbors.front.z || 0) < obj.z) faces.push('front');
-        if (!neighbors.back || (neighbors.back.z || 0) < obj.z) faces.push('back');
-        if (!neighbors.left || (neighbors.left.z || 0) < obj.z) faces.push('left');
-        if (!neighbors.right || (neighbors.right.z || 0) < obj.z) faces.push('right');
-
-        // Always show bottom if there's height
-        faces.push('bottom');
-    }
-
-    return faces;
-}
-
-// Helper function to get face normal vectors
-function getFaceNormal(faceName) {
-    const normals = {
-        top: [0, 1, 0],
-        bottom: [0, -1, 0],
-        front: [0, 0, 1],
-        back: [0, 0, -1],
-        left: [-1, 0, 0],
-        right: [1, 0, 0]
-    };
-    return normals[faceName] || [0, 1, 0];
 }
 
 export default {
