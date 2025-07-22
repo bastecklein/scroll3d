@@ -8320,6 +8320,7 @@ function addCanvasChunk(instance, data) {
     });
 }
 
+
 async function doWorkCanvasChunk(instance, data, callback) {
 
     let rOrder = "0";
@@ -8420,253 +8421,107 @@ async function doWorkCanvasChunk(instance, data, callback) {
         }
     }
 
-    const geometry = new BufferGeometry();
     const positions = [];
     const normals = [];
     const uvs = [];
 
-    
+    function pushFace(p, n, uv) {
+        positions.push(...p);
+        normals.push(...n);
+        uvs.push(...uv);
+    }
 
-    for(let x = 0; x < data.data.length; x++) {
-        for(let z = 0; z < data.data.length; z++) {
-            const obj = data.data[x][z];
+    for (let z = 0; z < instance.chunkSize; z++) {
+        for (let x = 0; x < instance.chunkSize; x++) {
+            const tile = data[z][x];
+            if (!tile) continue;
 
-            if(!obj) {
-                continue;
-            }
+            const h = tile.height || 1;
+            const x0 = x, x1 = x + 1;
+            const z0 = z, z1 = z + 1;
+            const y0 = 0, y1 = h;
 
-            let floorZ = obj.z || 0;
-            let waterNeighbor = false;
+            // ==== TOP FACE ====
+            const topU0 = (x * useTextureSize) / atlasWidth;
+            const topV0 = (z * useTextureSize) / atlasHeight;
+            const topU1 = ((x + 1) * useTextureSize) / atlasWidth;
+            const topV1 = ((z + 1) * useTextureSize) / atlasHeight;
 
-            const height = obj.z || 1;
-            const topU = x * useTextureSize / atlasWidth;
-            const topV = z * useTextureSize / atlasHeight;
-            const topU2 = (x + 1) * useTextureSize / atlasWidth;
-            const topV2 = (z + 1) * useTextureSize / atlasHeight;
+            pushFace(
+                [x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z0, x1, y1, z1, x0, y1, z1],
+                [0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
+                [topU0, topV0, topU1, topV0, topU1, topV1, topU0, topV0, topU1, topV1, topU0, topV1]
+            );
 
-            const useSide = obj.middle || defTx.middle || null;
+            // ==== SIDE FACES ====
+            const sideKey = tile.side || tile.top;
+            const sideIdx = sideIndicies.get(sideKey);
+            const sideBaseV = (atlasWidth + sideIdx * useTextureSize) / atlasHeight;
+            const sideU0 = 0;
+            const sideU1 = useTextureSize / atlasWidth;
+            const vRepeat = h; // Repeat per height unit
 
-            let hasSide = false;
+            // FRONT (+Z)
+            pushFace(
+                [x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y0, z1, x1, y1, z1, x0, y1, z1],
+                [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+                [
+                    sideU0, sideBaseV,
+                    sideU1, sideBaseV,
+                    sideU1, sideBaseV + vRepeat,
+                    sideU0, sideBaseV,
+                    sideU1, sideBaseV + vRepeat,
+                    sideU0, sideBaseV + vRepeat
+                ]
+            );
 
-            let sideIdx = null;
-            let sideU = null;
-            let sideU2 = null;
-            let sideYOffset = null;
-            let sideVScale = null;
+            // BACK (-Z)
+            pushFace(
+                [x1, y0, z0, x0, y0, z0, x0, y1, z0, x1, y0, z0, x0, y1, z0, x1, y1, z0],
+                [0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1],
+                [
+                    sideU0, sideBaseV,
+                    sideU1, sideBaseV,
+                    sideU1, sideBaseV + vRepeat,
+                    sideU0, sideBaseV,
+                    sideU1, sideBaseV + vRepeat,
+                    sideU0, sideBaseV + vRepeat
+                ]
+            );
 
-            if(useSide && sideIndicies[useSide] !== undefined) {
-                hasSide = true;
+            // LEFT (-X)
+            pushFace(
+                [x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y0, z0, x0, y1, z1, x0, y1, z0],
+                [-1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0],
+                [
+                    sideU0, sideBaseV,
+                    sideU1, sideBaseV,
+                    sideU1, sideBaseV + vRepeat,
+                    sideU0, sideBaseV,
+                    sideU1, sideBaseV + vRepeat,
+                    sideU0, sideBaseV + vRepeat
+                ]
+            );
 
-                sideIdx = sideIndicies[useSide];
-                sideU = (0) / atlasWidth;
-                sideU2 = useTextureSize / atlasWidth;
-                sideYOffset = (instance.chunkSize * useTextureSize + sideIdx * useTextureSize) / atlasHeight;
-                sideVScale = height;
-            }
+            // RIGHT (+X)
+            pushFace(
+                [x1, y0, z1, x1, y0, z0, x1, y1, z0, x1, y0, z1, x1, y1, z0, x1, y1, z1],
+                [1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
+                [
+                    sideU0, sideBaseV,
+                    sideU1, sideBaseV,
+                    sideU1, sideBaseV + vRepeat,
+                    sideU0, sideBaseV,
+                    sideU1, sideBaseV + vRepeat,
+                    sideU0, sideBaseV + vRepeat
+                ]
+            );
 
-            
-
-            for(let y = 0; y < WORLD_HEIGHT; y++) {
-                // there is ground here
-                if(y <= floorZ) {
-                    for (const {dir, corners, uvRow, altcorners, slopes, smdepress} of TEXTURE_FACES) {
-
-                        const ux = x + dir[0];
-                        const uy = y + dir[1];
-                        const uz = z + dir[2];
-
-                        const neighbor = getChunkTileNeighbor(
-                            data.data,
-                            ux,
-                            uy,
-                            uz,
-                            obj.isDepressed
-                        );
-
-                        let shouldSkip = false;
-
-                        if(neighbor && neighbor != -1) {
-                            if(!neighbor.isWater) {
-                                neighbor.isWater = false;
-                            } else {
-                                waterNeighbor = true;
-                            }
-
-                            if(!obj.isWater) {
-                                obj.isWater = false;
-                            }
-
-                            shouldSkip = true;
-
-                            
-                            if(obj.isWater != neighbor.isWater) {
-                                shouldSkip = false;
-                            }
-
-                            if(shouldSkip) {
-                                if((obj.slope || neighbor.slope) && (obj.slope != neighbor.slope)) {
-                                    //shouldSkip = false;
-                                }
-                            }
-                        } else {
-                            if(data.noSides && uvRow != 2 && neighbor != -1) {
-                                shouldSkip = true;
-                            }
-                        }
-
-                        if(obj.isWater && instance.waterTexture) {
-                            hasWater = true;
-                        }
-
-                        if(waterNeighbor) {
-                            shouldSkip = false;
-                        }
-
-
-                        if(!shouldSkip) {
-                            let ndx = positions.length / 3;
-
-                            let usecor = corners;
-
-                            if(obj.isWater && y == floorZ) {
-                                usecor = altcorners;
-                            }
-
-                            if(obj.isDepressed) {
-                                usecor = smdepress;
-                            }
-
-                            if(obj.slope && slopes[obj.slope]) {
-                                usecor = slopes[obj.slope];
-                            }
-
-                            if(obj.isWater && instance.waterTexture) {
-
-                                for (const {pos, uv} of corners) {
-                                    positions.push(pos[0] + x, (pos[1] + y) - 1, pos[2] + z);
-                                    normals.push(...dir);
-
-                                    /*
-                                    let tx = useTop;
-
-                                    let textureRow = 0;
-
-                                    let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
-
-                                    let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
-
-                                    let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
-
-                                    uvs.push(uvx,uvy);*/
-                                }
-
-                                /*
-                                indices.push(
-                                    ndx, ndx + 1, ndx + 2,
-                                    ndx + 2, ndx + 1, ndx + 3
-                                );*/
-                            } else {
-                                for (const {pos, uv} of usecor) {
-                                    positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
-                                    normals.push(...dir);
-
-                                    if(uvRow == 2 || !hasSide) {
-                                        uvs.push(topU, topV, topU2, topV, topU2, topV2, topU, topV, topU2, topV2, topU, topV2);
-                                    } else {
-                                        uvs.push(
-                                            sideU, sideYOffset,
-                                            sideU2, sideYOffset,
-                                            sideU2, sideYOffset + sideVScale,
-                                            sideU, sideYOffset,
-                                            sideU2, sideYOffset + sideVScale,
-                                            sideU, sideYOffset + sideVScale
-                                        );
-                                    }
-
-                                    /*
-                                    let tx = useMid;
-                                    
-                                    if(uvRow == 2) {
-                                        tx = useTop;
-                                    }
-
-                                    if(uvRow == 1) {
-                                        tx = useBottom;
-                                    }
-
-                                    let textureRow = 0;
-
-                                    let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
-
-                                    let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
-
-                                    let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
-
-                                    uvs.push(uvx,uvy);*/
-                                }
-
-                                /*
-                                indices.push(
-                                    ndx, ndx + 1, ndx + 2,
-                                    ndx + 2, ndx + 1, ndx + 3
-                                );*/
-
-                                if(waterNeighbor || obj.slope) {
-
-                                    ndx = positions.length / 3;
-
-                                    for (const {pos, uv} of corners) {
-
-
-                                        let uyy = (pos[1] + y) - 1;
-
-                                        if(obj.slope) {
-                                            uyy = pos[1] + y;
-                                        }
-
-                                        positions.push(pos[0] + x, uyy, pos[2] + z);
-                                        normals.push(...dir);
-
-                                        if(hasSide) {
-                                            uvs.push(
-                                                sideU, sideYOffset,
-                                                sideU2, sideYOffset,
-                                                sideU2, sideYOffset + sideVScale,
-                                                sideU, sideYOffset,
-                                                sideU2, sideYOffset + sideVScale,
-                                                sideU, sideYOffset + sideVScale
-                                            );
-                                        } else {
-                                            uvs.push(topU, topV, topU2, topV, topU2, topV2, topU, topV, topU2, topV2, topU, topV2);
-                                        }
-
-                                        /*
-                                        let tx = useBottom;
-
-                                        let textureRow = 0;
-    
-                                        let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
-
-                                        let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
-    
-                                        let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
-    
-                                        uvs.push(uvx,uvy);*/
-                                    }
-    
-                                    /*
-                                    indices.push(
-                                        ndx, ndx + 1, ndx + 2,
-                                        ndx + 2, ndx + 1, ndx + 3
-                                    );*/
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // (Optional: bottom face if you want later)
         }
     }
+
+    const geometry = new THREE.BufferGeometry();
 
     geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
     geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
