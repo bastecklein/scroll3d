@@ -67,7 +67,8 @@ import {
     TextureLoader,
     Vector2,
     Vector3,
-    WebGLRenderer
+    WebGLRenderer,
+    LinearMipmapLinearFilter
 } from "three";
 
 import { XRControllerModelFactory } from "three/addons/webxr/XRControllerModelFactory.js";
@@ -83,6 +84,7 @@ import { GammaCorrectionShader } from "three/addons/shaders/GammaCorrectionShade
 
 import { VPPLoader, generateLODGeometry, optimizeGeometry } from "vpploader";
 import { renderPPP } from "ppp-tools";
+import { ceilPowerOfTwo } from "three/src/math/MathUtils.js";
 
 export const DEF_PHI = 75;
 export const DEF_THETA = 50;
@@ -583,6 +585,8 @@ let useTextureSize = TEXTURE_SIZE;
 
 let useSimplifiedAtlas = false;
 
+let chunkCanvases = {};
+
 let currentGPPollInstance = null;
 
 let gphInit = false;
@@ -644,7 +648,6 @@ export function setTextureSize(size) {
     curAtlasIndex = 0;
     textureAtlas = {};
     curAtlasTexture = null;
-    tileTextures = {};
 
     resetAtlasTexture();
 }
@@ -1416,6 +1419,8 @@ export class Scroll3dEngine {
         }
 
         const chunkId = x + ":" + y + ":" + rOrder;
+
+        delete chunkCanvases[chunkId + ":" + instance.id];
 
         if(!instance.chunks[chunkId]) {
             return;
@@ -8305,6 +8310,414 @@ function calculateCurrentFPS(instance) {
     if(instance.lastFPS.length > 100) {
         instance.lastFPS.shift();
     }
+}
+
+function addCanvasChunk(instance, data) {
+    return new Promise((resolve, reject) => {
+        doWorkCanvasChunk(instance, data, function() {
+            resolve();
+        });
+    });
+}
+
+async function doWorkCanvasChunk(instance, data, callback) {
+
+    let rOrder = "0";
+
+    if(data.rOrder) {
+        rOrder = data.rOrder;
+    }
+
+    let hasWater = false;
+
+    const x = data.x;
+    const y = data.y;
+
+    const chunkId = x + ":" + y + ":" + rOrder;
+    const canvasId = chunkId + ":" + instance.id;
+
+    let uniqueSideTextures = [];
+
+    const defTx = data.defTexture || {};
+
+    if(defTx.middle) {
+        uniqueSideTextures.push(defTx.middle);
+    }
+
+    for(let x = 0; x < data.data.length; x++) {
+        for(let z = 0; z < data.data.length; z++) {
+            const obj = data.data[x][z];
+
+            if(!obj) {
+                continue;
+            }
+
+            if(obj.middle && uniqueSideTextures.indexOf(obj.middle) == -1) {
+                uniqueSideTextures.push(obj.middle);
+            }
+        }
+    }
+
+    const atlasWidth = instance.chunkSize * useTextureSize;
+    const atlasHeight = atlasWidth + uniqueSideTextures.length * useTextureSize; // maybe add in bottom textures at some point, ignoring for now
+
+    const canvasItems = {
+        tx: document.createElement("canvas"),
+        bm: null,
+        lm: null
+    };
+
+    chunkCanvases[canvasId] = canvasItems;
+
+    canvasItems.tx.width = atlasWidth;
+    canvasItems.tx.height = atlasHeight;
+
+    const ctx = canvasItems.tx.getContext("2d");
+
+    let sideIndicies = {};
+    let sideIdxCtr = 0;
+
+    for(let x = 0; x < data.data.length; x++) {
+        for(let z = 0; z < data.data.length; z++) {
+            const obj = data.data[x][z];
+
+            if(!obj) {
+                continue;
+            }
+
+            if(obj.middle && uniqueSideTextures.indexOf(obj.middle) == -1) {
+                uniqueSideTextures.push(obj.middle);
+            }
+
+            const useTop = obj.top || defTx.top || null;
+            
+            if(useTop) {
+                const dx = x * useTextureSize;
+                const dy = z * useTextureSize;
+
+                const topImg = await loadTileImageAsync(useTop);
+
+                if(topImg) {
+                    ctx.drawImage(topImg, dx, dy, useTextureSize, useTextureSize);
+                }
+            }
+
+            const useSide = obj.middle || defTx.middle || null;
+
+            if(useSide && !sideIndicies[useSide]) {
+                const dx = 0;
+                const dy = instance.chunkSize * useTextureSize + sideIdxCtr * useTextureSize;
+
+                sideIndicies[useSide] = sideIdxCtr;
+                sideIdxCtr++;
+
+                const sideImg = await loadTileImageAsync(useSide);
+
+                if(sideImg) {
+                    ctx.drawImage(sideImg, dx, dy, useTextureSize, useTextureSize);
+                }
+            }
+        }
+    }
+
+    const geometry = new BufferGeometry();
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+
+    
+
+    for(let x = 0; x < data.data.length; x++) {
+        for(let z = 0; z < data.data.length; z++) {
+            const obj = data.data[x][z];
+
+            if(!obj) {
+                continue;
+            }
+
+            let floorZ = obj.z || 0;
+            let waterNeighbor = false;
+
+            const height = obj.z || 1;
+            const topU = x * useTextureSize / atlasWidth;
+            const topV = z * useTextureSize / atlasHeight;
+            const topU2 = (x + 1) * useTextureSize / atlasWidth;
+            const topV2 = (z + 1) * useTextureSize / atlasHeight;
+
+            const useSide = obj.middle || defTx.middle || null;
+
+            let hasSide = false;
+
+            let sideIdx = null;
+            let sideU = null;
+            let sideU2 = null;
+            let sideYOffset = null;
+            let sideVScale = null;
+
+            if(useSide && sideIndicies[useSide] !== undefined) {
+                hasSide = true;
+
+                sideIdx = sideIndicies[useSide];
+                sideU = (0) / atlasWidth;
+                sideU2 = useTextureSize / atlasWidth;
+                sideYOffset = (instance.chunkSize * useTextureSize + sideIdx * useTextureSize) / atlasHeight;
+                sideVScale = height;
+            }
+
+            
+
+            for(let y = 0; y < WORLD_HEIGHT; y++) {
+                // there is ground here
+                if(y <= floorZ) {
+                    for (const {dir, corners, uvRow, altcorners, slopes, smdepress} of TEXTURE_FACES) {
+
+                        const ux = x + dir[0];
+                        const uy = y + dir[1];
+                        const uz = z + dir[2];
+
+                        const neighbor = getChunkTileNeighbor(
+                            data.data,
+                            ux,
+                            uy,
+                            uz,
+                            obj.isDepressed
+                        );
+
+                        let shouldSkip = false;
+
+                        if(neighbor && neighbor != -1) {
+                            if(!neighbor.isWater) {
+                                neighbor.isWater = false;
+                            } else {
+                                waterNeighbor = true;
+                            }
+
+                            if(!obj.isWater) {
+                                obj.isWater = false;
+                            }
+
+                            shouldSkip = true;
+
+                            
+                            if(obj.isWater != neighbor.isWater) {
+                                shouldSkip = false;
+                            }
+
+                            if(shouldSkip) {
+                                if((obj.slope || neighbor.slope) && (obj.slope != neighbor.slope)) {
+                                    //shouldSkip = false;
+                                }
+                            }
+                        } else {
+                            if(data.noSides && uvRow != 2 && neighbor != -1) {
+                                shouldSkip = true;
+                            }
+                        }
+
+                        if(obj.isWater && instance.waterTexture) {
+                            hasWater = true;
+                        }
+
+                        if(waterNeighbor) {
+                            shouldSkip = false;
+                        }
+
+
+                        if(!shouldSkip) {
+                            let ndx = positions.length / 3;
+
+                            let usecor = corners;
+
+                            if(obj.isWater && y == floorZ) {
+                                usecor = altcorners;
+                            }
+
+                            if(obj.isDepressed) {
+                                usecor = smdepress;
+                            }
+
+                            if(obj.slope && slopes[obj.slope]) {
+                                usecor = slopes[obj.slope];
+                            }
+
+                            if(obj.isWater && instance.waterTexture) {
+
+                                for (const {pos, uv} of corners) {
+                                    positions.push(pos[0] + x, (pos[1] + y) - 1, pos[2] + z);
+                                    normals.push(...dir);
+
+                                    /*
+                                    let tx = useTop;
+
+                                    let textureRow = 0;
+
+                                    let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
+
+                                    let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
+
+                                    let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
+
+                                    uvs.push(uvx,uvy);*/
+                                }
+
+                                /*
+                                indices.push(
+                                    ndx, ndx + 1, ndx + 2,
+                                    ndx + 2, ndx + 1, ndx + 3
+                                );*/
+                            } else {
+                                for (const {pos, uv} of usecor) {
+                                    positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
+                                    normals.push(...dir);
+
+                                    if(uvRow == 2 || !hasSide) {
+                                        uvs.push(topU, topV, topU2, topV, topU2, topV2, topU, topV, topU2, topV2, topU, topV2);
+                                    } else {
+                                        uvs.push(
+                                            sideU, sideYOffset,
+                                            sideU2, sideYOffset,
+                                            sideU2, sideYOffset + sideVScale,
+                                            sideU, sideYOffset,
+                                            sideU2, sideYOffset + sideVScale,
+                                            sideU, sideYOffset + sideVScale
+                                        );
+                                    }
+
+                                    /*
+                                    let tx = useMid;
+                                    
+                                    if(uvRow == 2) {
+                                        tx = useTop;
+                                    }
+
+                                    if(uvRow == 1) {
+                                        tx = useBottom;
+                                    }
+
+                                    let textureRow = 0;
+
+                                    let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
+
+                                    let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
+
+                                    let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
+
+                                    uvs.push(uvx,uvy);*/
+                                }
+
+                                /*
+                                indices.push(
+                                    ndx, ndx + 1, ndx + 2,
+                                    ndx + 2, ndx + 1, ndx + 3
+                                );*/
+
+                                if(waterNeighbor || obj.slope) {
+
+                                    ndx = positions.length / 3;
+
+                                    for (const {pos, uv} of corners) {
+
+
+                                        let uyy = (pos[1] + y) - 1;
+
+                                        if(obj.slope) {
+                                            uyy = pos[1] + y;
+                                        }
+
+                                        positions.push(pos[0] + x, uyy, pos[2] + z);
+                                        normals.push(...dir);
+
+                                        if(hasSide) {
+                                            uvs.push(
+                                                sideU, sideYOffset,
+                                                sideU2, sideYOffset,
+                                                sideU2, sideYOffset + sideVScale,
+                                                sideU, sideYOffset,
+                                                sideU2, sideYOffset + sideVScale,
+                                                sideU, sideYOffset + sideVScale
+                                            );
+                                        } else {
+                                            uvs.push(topU, topV, topU2, topV, topU2, topV2, topU, topV, topU2, topV2, topU, topV2);
+                                        }
+
+                                        /*
+                                        let tx = useBottom;
+
+                                        let textureRow = 0;
+    
+                                        let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
+
+                                        let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
+    
+                                        let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
+    
+                                        uvs.push(uvx,uvy);*/
+                                    }
+    
+                                    /*
+                                    indices.push(
+                                        ndx, ndx + 1, ndx + 2,
+                                        ndx + 2, ndx + 1, ndx + 3
+                                    );*/
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
+    geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
+
+    const diffuseTexture = new CanvasTexture(canvasItems.tx);
+    diffuseTexture.wrapS = RepeatWrapping;
+    diffuseTexture.wrapT = RepeatWrapping;
+    diffuseTexture.anisotropy = instance.renderer.capabilities.getMaxAnisotropy();
+    diffuseTexture.minFilter = LinearMipmapLinearFilter;
+    diffuseTexture.generateMipmaps = true;
+
+    const material = new MeshStandardMaterial({ map: diffuseTexture });
+    const mesh = new Mesh(geometry, material);
+
+    const meshX = (data.x * instance.chunkSize) * 2;
+    const meshY = (data.y * instance.chunkSize) * 2;
+
+    mesh.position.set(meshX, 0, meshY);
+
+    mesh.receiveShadow = true;
+
+    instance.removeChunk(data.x, data.y, rOrder, 500);
+
+    instance.chunks[chunkId] = mesh;
+
+    instance.scene.add(mesh);
+    instance.hitTestObjects.push(mesh);
+
+    clearAllParticleSystems(instance);
+}
+
+function loadTileImageAsync(src) {
+
+    const txHash = hash(src);
+
+    if(tileTextures[txHash]) {
+        return new Promise((resolve) => {
+            resolve(tileTextures[txHash]);
+        });
+    }
+
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            tileTextures[txHash] = img;
+            resolve(img);
+        };
+        img.onerror = (err) => reject(err);
+        img.src = src;
+    });
 }
 
 export default {
