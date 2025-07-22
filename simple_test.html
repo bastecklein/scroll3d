@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Rounded Corners Test</title>
+    <style>
+        body { margin: 0; background: #222; color: white; font-family: Arial; }
+        #container { width: 800px; height: 600px; border: 1px solid #666; }
+        .controls { margin: 20px; }
+        button { margin: 5px; padding: 8px 16px; background: #444; color: white; border: none; cursor: pointer; }
+        button:hover { background: #555; }
+    </style>
+</head>
+<body>
+    <h2>Rounded Corners Test</h2>
+    <div class="controls">
+        <button onclick="testSharp()">Sharp Corners</button>
+        <button onclick="testRounded()">Rounded Corners</button>
+    </div>
+    <div id="container"></div>
+
+    <script type="module">
+        import { getInstance } from './src/index.js';
+
+        const engine = getInstance(document.getElementById('container'));
+
+        // Simple chunk data
+        const createChunk = () => ({
+            x: 0, y: 0,
+            data: [
+                [null, null],
+                [null, { z: 1, top: "#4CAF50" }]
+            ],
+            defTexture: {
+                top: "#888",
+                middle: "#666",
+                noise: false
+            }
+        });
+
+        window.testSharp = () => {
+            engine.removeChunk(0, 0);
+            engine.addChunk(createChunk());
+        };
+
+        window.testRounded = () => {
+            engine.removeChunk(0, 0);
+            engine.addChunk(createChunk(), {
+                enabled: true,
+                radius: 0.2
+            });
+        };
+
+        // Start with sharp
+        testSharp();
+    </script>
+</body>
+</html>
