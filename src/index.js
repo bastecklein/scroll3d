@@ -1237,7 +1237,7 @@ export class Scroll3dEngine {
         return true;
     }
 
-    addChunk(data, roundedCorners) {
+    addChunk(data) {
         const instance = this;
 
         const defTexture = data.defTexture;
@@ -1280,7 +1280,7 @@ export class Scroll3dEngine {
         if(defTop == -1 || defMid == -1 || defBot == -1) {
 
             setTimeout(function() {
-                instance.addChunk(data, roundedCorners);
+                instance.addChunk(data);
             }, 200);
 
             return;
@@ -1296,7 +1296,7 @@ export class Scroll3dEngine {
                     continue;
                 }
 
-                const result = addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTexture, defMidBleed, positions, normals, uvs, indices, totalAtlasSize, waterColor, hasWater, roundedCorners);
+                const result = addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTexture, defMidBleed, positions, normals, uvs, indices, totalAtlasSize, waterColor, hasWater);
 
                 if(!result) {
                     return;
@@ -1320,7 +1320,7 @@ export class Scroll3dEngine {
         }
 
         if(endingAssetSize != totalAtlasSize) {
-            instance.addChunk(data, roundedCorners);
+            instance.addChunk(data);
             return;
         } else {
             const cellgeo = new BufferGeometry();
@@ -4780,7 +4780,7 @@ function getTextureIndex(options,chunkData,instance) {
                         }
 
                         instance.removeChunk(chunkData.x,chunkData.y,rOrder);
-                        instance.addChunk(chunkData, data.roundedCorners);
+                        instance.addChunk(chunkData);
                     }
                 },
                 source: options.pppTextureData,
@@ -5051,92 +5051,7 @@ function getTextureIndex(options,chunkData,instance) {
     return -1;
 }
 
-/**
- * Determines if a face should have rounded corners based on neighboring blocks
- * @param {Object} data - Chunk data
- * @param {number} x - X position in chunk  
- * @param {number} y - Y height level
- * @param {number} z - Z position in chunk
- * @param {Array} dir - Face direction vector [x,y,z]
- * @returns {boolean} True if this face should be rounded
- */
-function shouldRoundFace(data, x, y, z, dir) {
-    // Check if this face is on the exterior edge of the chunk where rounding would be visible
-    
-    // Get the neighboring position for this face
-    const nx = x + dir[0];
-    const ny = y + dir[1]; 
-    const nz = z + dir[2];
-    
-    // If neighbor is outside chunk bounds, this is an exterior face
-    if (nx < 0 || nx >= data.data.length || nz < 0 || nz >= data.data.length) {
-        return true;
-    }
-    
-    // Check if there's a neighboring block that would hide this face
-    const neighbor = getChunkTileNeighbor(data.data, nx, ny, nz, false);
-    
-    // If no neighbor block, this face is exposed and should be rounded
-    return !neighbor || neighbor === -1;
-}
-
-/**
- * Generates rounded corner geometry for a face with proper UV mapping
- * @param {Array} corners - Original corner positions [{pos: [x,y,z], uv: [u,v]}, ...]
- * @param {Object} roundingOptions - Options for rounding {enabled, radius, segments}
- * @param {Array} dir - Face direction vector for normal calculation [x,y,z]
- * @returns {Object} Object with vertices and indices arrays
- */
-function generateRoundedCorners(corners, roundingOptions, dir) {
-    const { radius = 0.15 } = roundingOptions;
-    const vertices = [];
-    const indices = [];
-    
-    if (corners.length !== 4) {
-        // Fallback to original corners if not a quad
-        return { vertices: corners, indices: [0, 1, 2, 2, 1, 3] };
-    }
-    
-    // Create a simple chamfered corner by slightly insetting the face
-    const insetFactor = radius * 0.5; // More conservative insetting
-    
-    const cornerPositions = corners.map(corner => corner.pos);
-    const cornerUVs = corners.map(corner => corner.uv);
-    
-    // Calculate face center
-    const center = [0, 0, 0];
-    cornerPositions.forEach(pos => {
-        center[0] += pos[0];
-        center[1] += pos[1]; 
-        center[2] += pos[2];
-    });
-    center[0] /= corners.length;
-    center[1] /= corners.length;
-    center[2] /= corners.length;
-    
-    // Create slightly inset vertices with proper UV interpolation
-    for (let i = 0; i < corners.length; i++) {
-        const pos = cornerPositions[i];
-        const uv = cornerUVs[i];
-        
-        // Move corner slightly toward center
-        const insetPos = [
-            pos[0] + (center[0] - pos[0]) * insetFactor,
-            pos[1] + (center[1] - pos[1]) * insetFactor,
-            pos[2] + (center[2] - pos[2]) * insetFactor
-        ];
-        
-        // Keep original UV coordinates for proper texture mapping
-        vertices.push({ pos: insetPos, uv: uv });
-    }
-    
-    // Create two triangles for the quad face
-    indices.push(0, 1, 2, 2, 1, 3);
-    
-    return { vertices, indices };
-}
-
-function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTexture, defMidBleed, positions, normals, uvs, indices, totalAtlasSize, waterColor, hasWater, roundedCorners) {
+function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTexture, defMidBleed, positions, normals, uvs, indices, totalAtlasSize, waterColor, hasWater) {
     let floorZ = 0;
     let useTop = defTop;
     let useBottom = defBot;
@@ -5162,7 +5077,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
 
         if(useMid == -1) {
             setTimeout(function() {
-                instance.addChunk(data, roundedCorners);
+                instance.addChunk(data);
             }, 200);
         
             return null;
@@ -5181,7 +5096,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
 
         if(useBottom == -1) {
             setTimeout(function() {
-                instance.addChunk(data, roundedCorners);
+                instance.addChunk(data);
             }, 200);
         
             return null;
@@ -5214,7 +5129,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
 
             if(useMid == -1) {
                 setTimeout(function() {
-                    instance.addChunk(data, roundedCorners);
+                    instance.addChunk(data);
                 }, 200);
             
                 return null;
@@ -5295,7 +5210,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
 
         if(useTop == -1) {
             setTimeout(function() {
-                instance.addChunk(data, roundedCorners);
+                instance.addChunk(data);
             }, 200);
         
             return null;
@@ -5400,73 +5315,35 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                             ndx + 2, ndx + 1, ndx + 3
                         );
                     } else {
-                        // Check if rounded corners are enabled AND this face should be rounded
-                        if(roundedCorners && roundedCorners.enabled && shouldRoundFace(data, x, y, z, dir)) {
-                            // Use rounded corner geometry for exterior faces only
-                            const roundedGeometry = generateRoundedCorners(usecor, roundedCorners, dir);
-                            
-                            for (const vertex of roundedGeometry.vertices) {
-                                const {pos, uv} = vertex;
-                                positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
-                                normals.push(...dir);
+                        for (const {pos, uv} of usecor) {
+                            positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
+                            normals.push(...dir);
 
-                                let tx = useMid;
-                                        
-                                if(uvRow == 2) {
-                                    tx = useTop;
-                                }
-
-                                if(uvRow == 1) {
-                                    tx = useBottom;
-                                }
-
-                                let textureRow = 0;
-
-                                let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
-
-                                let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
-
-                                let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
-
-                                uvs.push(uvx,uvy);
-                            }
-                            
-                            // Add indices for rounded geometry
-                            for (let i = 0; i < roundedGeometry.indices.length; i++) {
-                                indices.push(ndx + roundedGeometry.indices[i]);
-                            }
-                        } else {
-                            // Use regular sharp corner geometry for interior faces or when rounding disabled
-                            for (const {pos, uv} of usecor) {
-                                positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
-                                normals.push(...dir);
-
-                                let tx = useMid;
-                                        
-                                if(uvRow == 2) {
-                                    tx = useTop;
-                                }
-
-                                if(uvRow == 1) {
-                                    tx = useBottom;
-                                }
-
-                                let textureRow = 0;
-
-                                let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
-
-                                let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
-
-                                let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
-
-                                uvs.push(uvx,uvy);
+                            let tx = useMid;
+                                    
+                            if(uvRow == 2) {
+                                tx = useTop;
                             }
 
-                            indices.push(
-                                ndx, ndx + 1, ndx + 2,
-                                ndx + 2, ndx + 1, ndx + 3
-                            );
+                            if(uvRow == 1) {
+                                tx = useBottom;
+                            }
+
+                            let textureRow = 0;
+
+                            let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
+
+                            let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
+
+                            let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
+
+                            uvs.push(uvx,uvy);
                         }
+
+                        indices.push(
+                            ndx, ndx + 1, ndx + 2,
+                            ndx + 2, ndx + 1, ndx + 3
+                        );
 
                         if(waterNeighbor || obj.slope) {
 
