@@ -1405,6 +1405,7 @@ export class Scroll3dEngine {
         }
     }
 
+    /*
         if(hasWater && instance.waterTexture && !instance.waterPlane) {
 
             if(!instance.waterGeometry) {
@@ -1428,7 +1429,7 @@ export class Scroll3dEngine {
             instance.scene.add(instance.waterPlane);
             instance.hitTestObjects.push(instance.waterPlane);
         }
-    }
+    }*/
 
     async addChunkCanvas(data) {
         const instance = this;
