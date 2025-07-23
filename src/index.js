@@ -5326,7 +5326,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
 
                             let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
 
-                            uvs.push(uvx,uvy);
+                            uvs.push(uvx, uvy);
                         }
 
                         indices.push(
@@ -8421,10 +8421,11 @@ async function doWorkCanvasChunk(instance, data, callback) {
     }
 
     const geometry = new BufferGeometry();
+
     const positions = [];
     const normals = [];
     const uvs = [];
-
+    const indices = [];
     
 
     for(let x = 0; x < data.data.length; x++) {
@@ -8560,11 +8561,11 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                     uvs.push(uvx,uvy);*/
                                 }
 
-                                /*
+                                
                                 indices.push(
                                     ndx, ndx + 1, ndx + 2,
                                     ndx + 2, ndx + 1, ndx + 3
-                                );*/
+                                );
                             } else {
                                 for (const {pos, uv} of usecor) {
                                     positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
@@ -8572,7 +8573,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
                                     if(uvRow == 2 || !hasSide) {
 
-                                        let uvx = (x +   uv[0]) * 1 / atlasWidth;
+                                        let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
                                         let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / useTextureSize;
 
                                         uvs.push(uvx,uvy);
@@ -8611,11 +8612,11 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                     uvs.push(uvx,uvy);*/
                                 }
 
-                                /*
+                                
                                 indices.push(
                                     ndx, ndx + 1, ndx + 2,
                                     ndx + 2, ndx + 1, ndx + 3
-                                );*/
+                                );
 
                                 if(waterNeighbor || obj.slope) {
 
@@ -8633,6 +8634,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                         positions.push(pos[0] + x, uyy, pos[2] + z);
                                         normals.push(...dir);
 
+                                        /*
                                         if(hasSide) {
                                             uvs.push(
                                                 sideU, sideYOffset,
@@ -8644,7 +8646,10 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                             );
                                         } else {
                                             uvs.push(topU, topV, topU2, topV, topU2, topV2, topU, topV, topU2, topV2, topU, topV2);
-                                        }
+                                        }*/
+
+                                        
+
 
                                         /*
                                         let tx = useBottom;
@@ -8658,6 +8663,12 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                         let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
     
                                         uvs.push(uvx,uvy);*/
+
+
+                                        let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
+                                        let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / useTextureSize;
+
+                                        uvs.push(uvx, uvy);
                                     }
     
                                     /*
@@ -8674,10 +8685,30 @@ async function doWorkCanvasChunk(instance, data, callback) {
         }
     }
 
-    geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
-    geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
-    geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
+    const positionNumComponents = 3;
+    const normalNumComponents = 3;
+    const uvNumComponents = 2;
+            
+    geometry.setAttribute(
+        "position",
+        new BufferAttribute(new Float32Array(positions), positionNumComponents));
 
+    geometry.setAttribute(
+        "normal",
+        new BufferAttribute(new Float32Array(normals), normalNumComponents));
+
+    geometry.setAttribute(
+        "uv",
+        new BufferAttribute(new Float32Array(uvs), uvNumComponents));
+
+    geometry.setIndex(indices);
+
+    geometry.scale(2, 2, 2);
+
+    geometry.normalsNeedUpdate = true;
+    geometry.computeVertexNormals();
+
+    // ==== CREATE TEXTURE & MESH ====
     const diffuseTexture = new CanvasTexture(canvasItems.tx);
     diffuseTexture.wrapS = RepeatWrapping;
     diffuseTexture.wrapT = RepeatWrapping;
@@ -8685,7 +8716,8 @@ async function doWorkCanvasChunk(instance, data, callback) {
     diffuseTexture.minFilter = LinearMipmapLinearFilter;
     diffuseTexture.generateMipmaps = true;
 
-    const material = new MeshStandardMaterial({ map: diffuseTexture });
+    const material = new MeshLambertMaterial({ map: diffuseTexture });
+
     const mesh = new Mesh(geometry, material);
 
     const meshX = (data.x * instance.chunkSize) * 2;
@@ -8694,6 +8726,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
     mesh.position.set(meshX, 0, meshY);
 
     mesh.receiveShadow = true;
+
 
     instance.removeChunk(data.x, data.y, rOrder, 500);
 
