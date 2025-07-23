@@ -8452,6 +8452,9 @@ async function doWorkCanvasChunk(instance, data, callback) {
             const topTxX = (x * useTextureSize) / atlasWidth;
             const topTxY = (z * useTextureSize) / atlasHeight;
 
+            const txPerW = useTextureSize / atlasWidth;
+            const txPerH = useTextureSize / atlasHeight;
+
             let sideTxX = topTxX;
             let sideTxY = topTxY;
 
@@ -8591,21 +8594,31 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                     positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
                                     normals.push(...dir);
 
+                                    let txX = sideTxX;
+                                    let txY = sideTxY;
+
+
+
                                     if(uvRow == 2 || !hasSide) {
+
+                                        txX = topTxX;
+                                        txY = topTxY;
 
                                         //let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
                                         //let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / atlasHeight;
 
+                                        /*
                                         let uvx = topTxX + uv[0];
                                         let uvy = topTxY + uv[1];
 
-                                        uvs.push(uvx, uvy);
+                                        uvs.push(uvx, uvy);*/
 
                                         //uvs.push(topU, topV, topU2, topV, topU2, topV2, topU, topV, topU2, topV2, topU, topV2);
                                     } else {
 
+                                        /*
                                         let uvx = sideTxX + uv[0];
-                                        let uvy = sideTxY + uv[1];
+                                        let uvy = sideTxY + uv[1];*/
 
 
                                         /*
@@ -8618,6 +8631,12 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                             sideU, sideYOffset + sideVScale
                                         );*/
                                     }
+
+                                    const uvx = txX + uv[0] * txPerW;
+                                    const uvy = txY + uv[1] * txPerH;
+
+                                    uvs.push(uvx, uvy);
+
 
                                     /*
                                     let tx = useMid;
