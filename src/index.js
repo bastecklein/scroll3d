@@ -8420,11 +8420,15 @@ async function doWorkCanvasChunk(instance, data, callback) {
         }
     }
 
-    console.log(canvasItems);
+    if(data.x == 0 && data.y == 0) {
+        console.log(canvasItems);
 
-    console.log(canvasItems.tx.toDataURL());
+        console.log(canvasItems.tx.toDataURL());
 
-    console.log("look at that bro");
+        console.log("look at that bro");
+    }
+
+    
 
     const geometry = new BufferGeometry();
 
