@@ -8584,7 +8584,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                     if(uvRow == 2 || !hasSide) {
 
                                         let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
-                                        let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / useTextureSize;
+                                        let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / atlasHeight;
 
                                         uvs.push(uvx,uvy);
 
