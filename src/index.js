@@ -8449,6 +8449,12 @@ async function doWorkCanvasChunk(instance, data, callback) {
             let floorZ = obj.z || 0;
             let waterNeighbor = false;
 
+            const topTxX = (x * useTextureSize) / atlasWidth;
+            const topTxY = (z * useTextureSize) / atlasHeight;
+
+            let sideTxX = topTxX;
+            let sideTxY = topTxY;
+
             const height = obj.z || 1;
             const topU = x * useTextureSize / atlasWidth;
             const topV = z * useTextureSize / atlasHeight;
@@ -8469,6 +8475,10 @@ async function doWorkCanvasChunk(instance, data, callback) {
                 hasSide = true;
 
                 sideIdx = sideIndicies[useSide];
+
+                sideTxX = 0;
+                sideTxY = (sideIdx * useTextureSize) / atlasHeight;
+
                 sideU = (0) / atlasWidth;
                 sideU2 = useTextureSize / atlasWidth;
                 sideYOffset = (instance.chunkSize * useTextureSize + sideIdx * useTextureSize) / atlasHeight;
@@ -8583,13 +8593,22 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
                                     if(uvRow == 2 || !hasSide) {
 
-                                        let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
-                                        let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / atlasHeight;
+                                        //let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
+                                        //let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / atlasHeight;
 
-                                        uvs.push(uvx,uvy);
+                                        let uvx = topTxX + uv[0];
+                                        let uvy = topTxY + uv[1];
+
+                                        uvs.push(uvx, uvy);
 
                                         //uvs.push(topU, topV, topU2, topV, topU2, topV2, topU, topV, topU2, topV2, topU, topV2);
                                     } else {
+
+                                        let uvx = sideTxX + uv[0];
+                                        let uvy = sideTxY + uv[1];
+
+
+                                        /*
                                         uvs.push(
                                             sideU, sideYOffset,
                                             sideU2, sideYOffset,
@@ -8597,7 +8616,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                             sideU, sideYOffset,
                                             sideU2, sideYOffset + sideVScale,
                                             sideU, sideYOffset + sideVScale
-                                        );
+                                        );*/
                                     }
 
                                     /*
@@ -8675,8 +8694,11 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                         uvs.push(uvx,uvy);*/
 
 
-                                        let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
-                                        let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / useTextureSize;
+                                        //let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
+                                        //let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / useTextureSize;
+
+                                        let uvx = topTxX + uv[0];
+                                        let uvy = topTxY + uv[1];
 
                                         uvs.push(uvx, uvy);
                                     }
