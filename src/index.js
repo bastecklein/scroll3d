@@ -8437,6 +8437,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
     const uvs = [];
     const indices = [];
     
+    const topAtlastPer = atlasWidth / atlasHeight;
 
     for(let x = 0; x < data.data.length; x++) {
         for(let z = 0; z < data.data.length; z++) {
@@ -8449,8 +8450,10 @@ async function doWorkCanvasChunk(instance, data, callback) {
             let floorZ = obj.z || 0;
             let waterNeighbor = false;
 
+            
+
             const topTxX = (x * useTextureSize) / atlasWidth;
-            const topTxY = 1 - ((z * useTextureSize) / atlasWidth); // using width for both x and y since the top map is a square texture
+            const topTxY = topAtlastPer - ((z * useTextureSize) / atlasWidth); // using width for both x and y since the top map is a square texture
 
             const txPerW = useTextureSize / atlasWidth;
             const txPerH = useTextureSize / atlasHeight;
