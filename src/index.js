@@ -85,6 +85,7 @@ import { GammaCorrectionShader } from "three/addons/shaders/GammaCorrectionShade
 import { VPPLoader, generateLODGeometry, optimizeGeometry } from "vpploader";
 import { renderPPP } from "ppp-tools";
 import { ceilPowerOfTwo } from "three/src/math/MathUtils.js";
+import { call } from "three/tsl";
 
 export const DEF_PHI = 75;
 export const DEF_THETA = 50;
@@ -330,22 +331,27 @@ const TEXTURE_FACES = [
         uvRow: 2,
         dir: [  0,  1,  0, ],
         corners: [
+            { pos: [ 0, 1, 1 ], uv: [ UV_TEXT_MIN, UV_TEXT_MIN ] },
+            { pos: [ 1, 1, 1 ], uv: [ UV_TEXT_MAX, UV_TEXT_MIN ] },
+            { pos: [ 0, 1, 0 ], uv: [ UV_TEXT_MIN, UV_TEXT_MAX ] },
+            { pos: [ 1, 1, 0 ], uv: [ UV_TEXT_MAX, UV_TEXT_MAX ] }/*
             { pos: [ 0, 1, 1 ], uv: [ UV_TEXT_MAX, UV_TEXT_MAX ] },
             { pos: [ 1, 1, 1 ], uv: [ UV_TEXT_MIN, UV_TEXT_MAX ] },
             { pos: [ 0, 1, 0 ], uv: [ UV_TEXT_MAX, UV_TEXT_MIN ] },
             { pos: [ 1, 1, 0 ], uv: [ UV_TEXT_MIN, UV_TEXT_MIN ] }
+             */
         ],
         altcorners: [
-            { pos: [ 0, 0.9, 1 ], uv: [ UV_TEXT_MAX, UV_TEXT_MAX ] },
-            { pos: [ 1, 0.9, 1 ], uv: [ UV_TEXT_MIN, UV_TEXT_MAX ] },
-            { pos: [ 0, 0.9, 0 ], uv: [ UV_TEXT_MAX, UV_TEXT_MIN ] },
-            { pos: [ 1, 0.9, 0 ], uv: [ UV_TEXT_MIN, UV_TEXT_MIN ] }
+            { pos: [ 0, 0.9, 1 ], uv: [ UV_TEXT_MIN, UV_TEXT_MIN ] },
+            { pos: [ 1, 0.9, 1 ], uv: [ UV_TEXT_MAX, UV_TEXT_MIN ] },
+            { pos: [ 0, 0.9, 0 ], uv: [ UV_TEXT_MIN, UV_TEXT_MAX ] },
+            { pos: [ 1, 0.9, 0 ], uv: [ UV_TEXT_MAX, UV_TEXT_MAX ] }
         ],
         smdepress: [
-            { pos: [ 0, SMALL_DEPRESS_AMT, 1 ], uv: [ UV_TEXT_MAX, UV_TEXT_MAX ] },
-            { pos: [ 1, SMALL_DEPRESS_AMT, 1 ], uv: [ UV_TEXT_MIN, UV_TEXT_MAX ] },
-            { pos: [ 0, SMALL_DEPRESS_AMT, 0 ], uv: [ UV_TEXT_MAX, UV_TEXT_MIN ] },
-            { pos: [ 1, SMALL_DEPRESS_AMT, 0 ], uv: [ UV_TEXT_MIN, UV_TEXT_MIN ] }
+            { pos: [ 0, SMALL_DEPRESS_AMT, 1 ], uv: [ UV_TEXT_MIN, UV_TEXT_MIN ] },
+            { pos: [ 1, SMALL_DEPRESS_AMT, 1 ], uv: [ UV_TEXT_MAX, UV_TEXT_MIN ] },
+            { pos: [ 0, SMALL_DEPRESS_AMT, 0 ], uv: [ UV_TEXT_MIN, UV_TEXT_MAX ] },
+            { pos: [ 1, SMALL_DEPRESS_AMT, 0 ], uv: [ UV_TEXT_MAX, UV_TEXT_MAX ] }
         ],
         slopes: {
             N: [
@@ -1386,29 +1392,7 @@ export class Scroll3dEngine {
             clearAllParticleSystems(instance);
         }
 
-        if(hasWater && instance.waterTexture && !instance.waterPlane) {
-
-            if(!instance.waterGeometry) {
-                instance.waterGeometry = new PlaneGeometry(256, 256);
-            }
-
-            instance.waterPlane = new Refractor(instance.waterGeometry, {
-                color: waterColor,
-                textureWidth: 1024, 
-                textureHeight: 1024,
-                shader: WaterRefractionShader,
-                depthTest: true,
-                depthWrite: false
-            });
-
-            instance.waterPlane.material.uniforms.tDudv.value = instance.waterTexture;
-
-            instance.waterPlane.position.set(instance.centerPosition.x * 2, 1.8, instance.centerPosition.y);
-            instance.waterPlane.rotation.x = - π * 0.5;
-
-            instance.scene.add(instance.waterPlane);
-            instance.hitTestObjects.push(instance.waterPlane);
-        }
+        
     }
 
     removeChunk(x, y, rOrder, withDelay = 0) {
@@ -3373,17 +3357,10 @@ function initInstance(instance) {
     instance.scene.add(instance.vrCamHolder);
 
     rebuildInstanceRenderer(instance);
-    
-    // Initialize VPP optimization managers
-    console.log("DEBUG: Available VPP classes:", { 
-        VPPLoader: typeof VPPLoader, 
-        generateLODGeometry: typeof generateLODGeometry,
-        optimizeGeometry: typeof optimizeGeometry
-    });
+
     
     // Initialize our custom optimization system
     instance.vppModelCache = new Map();
-    console.log("DEBUG: VPP optimization system initialized successfully");
 
     instance.vrCamHolder.position.set(
         instance.centerPosition.x + 20,
@@ -7775,6 +7752,7 @@ function handleInstanceGamepadScrolling(instance) {
  * WORKING OPTIMIZED: Enhanced VPP processing with real performance optimizations
  * Uses actual vpploader functions and smart instancing strategies
  */
+/*
 function processVPPInstancesOptimized(instance) {
     console.log("DEBUG: processVPPInstancesOptimized called");
     
@@ -7857,11 +7835,12 @@ function processVPPInstancesOptimized(instance) {
     if(modelGroups.size > 0) {
         console.log(`DEBUG: Found ${modelGroups.size} unique geometries for sharing`);
     }
-}
+}*/
 
 /**
  * Enhanced VPP instance setup with optimizations
  */
+/*
 function setupVPPInstanceObjectOptimized(instance, instOb, isOptimized = false) {
     // Use the existing setup but with enhancements
     setupVPPInstanceObject(instance, instOb);
@@ -7869,11 +7848,12 @@ function setupVPPInstanceObjectOptimized(instance, instOb, isOptimized = false) 
     if(isOptimized) {
         console.log("DEBUG: Used optimized geometry for instance");
     }
-}
+}*/
 
 /**
  * Create a hash of geometry for sharing identical models
  */
+/*
 function getGeometryHash(geometry) {
     if(!geometry || !geometry.attributes) return "unknown";
     
@@ -7881,7 +7861,7 @@ function getGeometryHash(geometry) {
     const indexCount = geometry.index?.count || 0;
     
     return `geom_${posCount}_${indexCount}`;
-}
+}*/
 
 /**
  * OLD VPP processing system as fallback
@@ -8328,6 +8308,8 @@ async function doWorkCanvasChunk(instance, data, callback) {
         rOrder = data.rOrder;
     }
 
+    let waterColor = "#03A9F4";
+
     let hasWater = false;
 
     const x = data.x;
@@ -8372,10 +8354,12 @@ async function doWorkCanvasChunk(instance, data, callback) {
     canvasItems.tx.width = atlasWidth;
     canvasItems.tx.height = atlasHeight;
 
+
     const ctx = canvasItems.tx.getContext("2d");
 
     let sideIndicies = {};
     let sideIdxCtr = 0;
+
 
     for(let x = 0; x < data.data.length; x++) {
         for(let z = 0; z < data.data.length; z++) {
@@ -8399,12 +8383,13 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
                 if(topImg) {
                     ctx.drawImage(topImg, dx, dy, useTextureSize, useTextureSize);
+
                 }
             }
 
             const useSide = obj.middle || defTx.middle || null;
 
-            if(useSide && !sideIndicies[useSide]) {
+            if(useSide && sideIndicies[useSide] == undefined) {
                 const dx = 0;
                 const dy = instance.chunkSize * useTextureSize + sideIdxCtr * useTextureSize;
 
@@ -8415,20 +8400,12 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
                 if(sideImg) {
                     ctx.drawImage(sideImg, dx, dy, useTextureSize, useTextureSize);
+
                 }
             }
         }
     }
 
-    if(data.x == 0 && data.y == 0) {
-        console.log(canvasItems);
-
-        console.log(canvasItems.tx.toDataURL());
-
-        console.log("look at that bro");
-    }
-
-    
 
     const geometry = new BufferGeometry();
 
@@ -8437,7 +8414,10 @@ async function doWorkCanvasChunk(instance, data, callback) {
     const uvs = [];
     const indices = [];
     
-    const topAtlastPer = atlasWidth / atlasHeight;
+
+
+    const txPerW = useTextureSize / atlasWidth;
+    const txPerH = useTextureSize / atlasHeight;
 
     for(let x = 0; x < data.data.length; x++) {
         for(let z = 0; z < data.data.length; z++) {
@@ -8450,45 +8430,40 @@ async function doWorkCanvasChunk(instance, data, callback) {
             let floorZ = obj.z || 0;
             let waterNeighbor = false;
 
+
+            const imgX = x * useTextureSize;
+            const imgY = z * useTextureSize;
+
+            const uv = imgCoordToUV(imgX, imgY, atlasWidth, atlasHeight, txPerH);
+
+
+            const topTxX = uv.u;
+            const topTxY = uv.v;
             
-
-            const topTxX = (x * useTextureSize) / atlasWidth;
-            const topTxY = topAtlastPer - ((z * useTextureSize) / atlasWidth); // using width for both x and y since the top map is a square texture
-
-            const txPerW = useTextureSize / atlasWidth;
-            const txPerH = useTextureSize / atlasHeight;
 
             let sideTxX = topTxX;
             let sideTxY = topTxY;
 
-            const height = obj.z || 1;
-            const topU = x * useTextureSize / atlasWidth;
-            const topV = z * useTextureSize / atlasHeight;
-            const topU2 = (x + 1) * useTextureSize / atlasWidth;
-            const topV2 = (z + 1) * useTextureSize / atlasHeight;
 
             const useSide = obj.middle || defTx.middle || null;
 
             let hasSide = false;
 
             let sideIdx = null;
-            let sideU = null;
-            let sideU2 = null;
-            let sideYOffset = null;
-            let sideVScale = null;
 
             if(useSide && sideIndicies[useSide] !== undefined) {
                 hasSide = true;
 
                 sideIdx = sideIndicies[useSide];
 
-                sideTxX = 0;
-                sideTxY = 1 - (sideIdx * useTextureSize) / atlasHeight;
+                const sideY = atlasWidth + (sideIdx * useTextureSize);
 
-                sideU = (0) / atlasWidth;
-                sideU2 = useTextureSize / atlasWidth;
-                sideYOffset = (instance.chunkSize * useTextureSize + sideIdx * useTextureSize) / atlasHeight;
-                sideVScale = height;
+                const uv = imgCoordToUV(0, sideY, atlasWidth, atlasHeight, txPerH);
+                
+                sideTxX = uv.u;
+                sideTxY = uv.v;
+
+
             }
 
             
@@ -8635,8 +8610,16 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                         );*/
                                     }
 
-                                    const uvx = txX + uv[0] * txPerW;
-                                    const uvy = txY + uv[1] * txPerH;
+                                    /*
+                                    const uvx = (txX - uv[0] * txPerW) + txPerW;
+                                    const uvy = (txY - uv[1] * txPerH) + txPerH;
+                                    */
+
+                                    const xInTile = uv[0] * txPerW;
+                                    const yInTile = uv[1] * txPerH;
+
+                                    const uvx = txX + xInTile;
+                                    const uvy = txY + yInTile;
 
                                     uvs.push(uvx, uvy);
 
@@ -8769,6 +8752,8 @@ async function doWorkCanvasChunk(instance, data, callback) {
     diffuseTexture.anisotropy = instance.renderer.capabilities.getMaxAnisotropy();
     diffuseTexture.minFilter = LinearMipmapLinearFilter;
     diffuseTexture.generateMipmaps = true;
+    diffuseTexture.colorSpace = USE_COLORSPACE;
+
 
     const material = new MeshLambertMaterial({ map: diffuseTexture });
 
@@ -8790,6 +8775,32 @@ async function doWorkCanvasChunk(instance, data, callback) {
     instance.hitTestObjects.push(mesh);
 
     clearAllParticleSystems(instance);
+
+    if(hasWater && instance.waterTexture && !instance.waterPlane) {
+
+        if(!instance.waterGeometry) {
+            instance.waterGeometry = new PlaneGeometry(256, 256);
+        }
+
+        instance.waterPlane = new Refractor(instance.waterGeometry, {
+            color: waterColor,
+            textureWidth: 1024, 
+            textureHeight: 1024,
+            shader: WaterRefractionShader,
+            depthTest: true,
+            depthWrite: false
+        });
+
+        instance.waterPlane.material.uniforms.tDudv.value = instance.waterTexture;
+
+        instance.waterPlane.position.set(instance.centerPosition.x * 2, 1.8, instance.centerPosition.y);
+        instance.waterPlane.rotation.x = - π * 0.5;
+
+        instance.scene.add(instance.waterPlane);
+        instance.hitTestObjects.push(instance.waterPlane);
+    }
+
+    callback();
 }
 
 function loadTileImageAsync(src) {
@@ -8811,6 +8822,16 @@ function loadTileImageAsync(src) {
         img.onerror = (err) => reject(err);
         img.src = src;
     });
+}
+
+function imgCoordToUV(x, y, width, height, txPerH) {
+
+
+
+    return {
+        u: x / width,
+        v: (height - y / height) - txPerH
+    };
 }
 
 export default {
