@@ -8420,6 +8420,12 @@ async function doWorkCanvasChunk(instance, data, callback) {
         }
     }
 
+    console.log(canvasItems);
+
+    console.log(canvasItems.tx.toDataURL());
+
+    console.log("look at that bro");
+
     const geometry = new BufferGeometry();
 
     const positions = [];
