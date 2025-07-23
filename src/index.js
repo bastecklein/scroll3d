@@ -8450,7 +8450,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
             let waterNeighbor = false;
 
             const topTxX = (x * useTextureSize) / atlasWidth;
-            const topTxY = 1 - ((z * useTextureSize) / atlasHeight);
+            const topTxY = (z * useTextureSize) / atlasHeight;
 
             const txPerW = useTextureSize / atlasWidth;
             const txPerH = useTextureSize / atlasHeight;
@@ -8480,7 +8480,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                 sideIdx = sideIndicies[useSide];
 
                 sideTxX = 0;
-                sideTxY = 1 - ((sideIdx * useTextureSize) / atlasHeight);
+                sideTxY = 1 - (sideIdx * useTextureSize) / atlasHeight;
 
                 sideU = (0) / atlasWidth;
                 sideU2 = useTextureSize / atlasWidth;
@@ -8633,7 +8633,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                     }
 
                                     const uvx = txX + uv[0] * txPerW;
-                                    const uvy = txY + uv[1] * txPerH;
+                                    const uvy = 1 - (txY + 1 - uv[1]) * txPerH;
 
                                     uvs.push(uvx, uvy);
 
