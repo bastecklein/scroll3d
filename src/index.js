@@ -8450,7 +8450,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
             let waterNeighbor = false;
 
             const topTxX = (x * useTextureSize) / atlasWidth;
-            const topTxY = 1 - ((z * useTextureSize) / atlasHeight);
+            const topTxY = 1 - ((z * useTextureSize) / atlasWidth); // using width for both x and y since the top map is a square texture
 
             const txPerW = useTextureSize / atlasWidth;
             const txPerH = useTextureSize / atlasHeight;
