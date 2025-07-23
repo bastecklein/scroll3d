@@ -8633,7 +8633,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                     }
 
                                     const uvx = txX + uv[0] * txPerW;
-                                    const uvy = 1 - (txY + 1 - uv[1]) * txPerH;
+                                    const uvy = txY + uv[1] * txPerH;
 
                                     uvs.push(uvx, uvy);
 
