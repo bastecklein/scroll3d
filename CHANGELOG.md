@@ -1,5 +1,11 @@
 # scroll3d changelog
 
+## 1.1.0 - 2025-07-31
+
+### Changed
+
+- Massive updates from ROC work
+
 ## 1.0.2 - 2025-05-19
 
 ### Fixed

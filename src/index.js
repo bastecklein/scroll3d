@@ -1,6 +1,7 @@
 /**
  * @typedef {object} Scroll3dPostProcessor
  * @property {BokehPass} bokeh
+ * @property {ShaderPass} tiltShift
  * @property {EffectComposer} composer
  * @property {RenderPass} render
  * @property {FilmPass} film
@@ -9,8 +10,10 @@
 import { guid, removeFromArray, hexToRGB, rgbToHex, hash, randomIntFromInterval, distBetweenPoints } from "common-helpers";
 import { handleInput } from "input-helper";
 import GPH from "gamepadhelper";
+import { BMLoader } from "bmloader";
 
 import {
+    MeshPhongMaterial,
     AdditiveBlending,
     AmbientLight,
     BackSide,
@@ -40,6 +43,7 @@ import {
     LineDashedMaterial,
     LineSegments,
     MathUtils,
+    MeshPhysicalMaterial,
     Matrix4,
     Mesh,
     MeshBasicMaterial,
@@ -85,7 +89,7 @@ import { GammaCorrectionShader } from "three/addons/shaders/GammaCorrectionShade
 import { VPPLoader, generateLODGeometry, optimizeGeometry } from "vpploader";
 import { renderPPP } from "ppp-tools";
 import { ceilPowerOfTwo } from "three/src/math/MathUtils.js";
-import { call } from "three/tsl";
+import { call, instance } from "three/tsl";
 
 export const DEF_PHI = 75;
 export const DEF_THETA = 50;
@@ -95,6 +99,13 @@ export const CAMERA_MODES = {
     LOCKED: 0,
     PAN: 1,
     ROTATE: 2
+};
+
+const MASK_ROTS = {
+    top: -Math.PI / 2,
+    bottom: Math.PI / 2,
+    left: Math.PI,
+    right: 0
 };
 
 const USE_COLORSPACE = SRGBColorSpace;
@@ -119,11 +130,20 @@ const MIN_PHI = 0;
 const MAX_PHI = 180;
 
 const DEF_APERTURE_RATIO = 1.25;
-const UV_TEXT_MIN = 0.02;
-const UV_TEXT_MAX = 0.98;
+
+const UV_TEXT_MIN = 0.01;
+const UV_TEXT_MAX = 0.99;
+
+//const UV_TEXT_MIN = 0.02;
+//const UV_TEXT_MAX = 0.98;
+
+//const UV_TEXT_MIN = 0;
+//const UV_TEXT_MAX = 1;
+
+
 const EDGE_SCROLLING_BUFFER = 10;
 const EDGE_SCROLLING_SPEED = 8;
-const DEF_SIZE_OUT_MULTIPLIER = 3;
+const DEF_SIZE_OUT_MULTIPLIER = 0.25;
 
 const DEF_INSTANCE_COUNT = 250000;
 const WORLD_HEIGHT = 128;
@@ -550,6 +570,60 @@ const PARTICLE_FRAGMENT_SHADER = `
       gl_FragColor = texture2D(diffuseTexture, coords) * vColour;
     }`;
 
+// Tilt-shift shader for Link's Awakening style effect
+const TiltShiftShader = {
+    uniforms: {
+        'tDiffuse': { value: null },
+        'focusHeight': { value: 0.5 },      // Center of focus (0.0 to 1.0)
+        'focusWidth': { value: 0.2 },       // Width of focused area (0.0 to 1.0)  
+        'blurAmount': { value: 5.0 },       // Blur strength
+        'resolution': { value: new Vector2(1024, 512) }
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float focusHeight;
+        uniform float focusWidth;
+        uniform float blurAmount;
+        uniform vec2 resolution;
+        varying vec2 vUv;
+
+        void main() {
+            vec4 color = vec4(0.0);
+            
+            // Calculate distance from focus center
+            float distFromCenter = abs(vUv.y - focusHeight);
+            
+            // Create smooth falloff from focus area
+            float blurFactor = smoothstep(focusWidth * 0.5, focusWidth * 0.5 + 0.2, distFromCenter);
+            
+            if (blurFactor > 0.0) {
+                // Apply blur
+                vec2 texelSize = 1.0 / resolution;
+                float blur = blurFactor * blurAmount;
+                
+                // Simple box blur
+                for (int x = -2; x <= 2; x++) {
+                    for (int y = -2; y <= 2; y++) {
+                        vec2 offset = vec2(float(x), float(y)) * texelSize * blur;
+                        color += texture2D(tDiffuse, vUv + offset);
+                    }
+                }
+                color /= 25.0; // Normalize (5x5 kernel)
+            } else {
+                // No blur - sharp focus
+                color = texture2D(tDiffuse, vUv);
+            }
+            
+            gl_FragColor = color;
+        }`
+};
+
 const AXIS_DEADZONE = 0.25;
 
 let tileTextures = {};
@@ -587,9 +661,12 @@ let splineRetentions = {};
 
 let sphereHandGeo = null;
 
+let cavasTextureAtlas = {};
+
 let useTextureSize = TEXTURE_SIZE;
 
 let useSimplifiedAtlas = false;
+let globalToyModeEnabled = false;
 
 let chunkCanvases = {};
 
@@ -597,7 +674,11 @@ let currentGPPollInstance = null;
 
 let gphInit = false;
 
+let genTexCanvas = document.createElement("canvas");
+let genTexContext = genTexCanvas.getContext("2d");
+
 const vppLoader = new VPPLoader();
+const bmLoader = new BMLoader();
 
 window.addEventListener("resize", onResize);
 document.addEventListener("visibilitychange", onResize);
@@ -750,6 +831,7 @@ export class Scroll3dEngine {
         this.sunYoffset = 60;
         this.sunAngle = 45;
         this.hemiBrightness = 0;
+        this.noAutoBrightness = false;
         this.sunColor = "#ffffff";
         this.showSun = false;
         this.skyBottomColor = "#E1F5FE";
@@ -799,6 +881,7 @@ export class Scroll3dEngine {
         this.hemisphereLight = null;
         this.waterGeometry = null;
         this.waterPlane = null;
+        this.waterPosition = 0.6;
 
         this.lastNight = true;
 
@@ -854,6 +937,8 @@ export class Scroll3dEngine {
         this.padVelocity = null;
         this.uiGamepadElement = null;
 
+        this.padControlMethod = "standard";
+
         this.axisStates = {};
         this.lastPadId = null;
 
@@ -878,6 +963,8 @@ export class Scroll3dEngine {
         this.effectiveScale = 1;
 
         this.useDOFEffect = options.useDOFEffect || false;
+        this.dofEffectType = options.dofEffectType || "bokeh"; // "bokeh" or "tiltshift"
+        this.toyModeEnabled = options.toyMode || false; // Link's Awakening style materials
 
         /**
          * @type {Scroll3dPostProcessor}
@@ -932,6 +1019,10 @@ export class Scroll3dEngine {
 
     resize() {
         setInstanceSize(this);
+    }
+
+    setPadControlMethod(method) {
+        this.padControlMethod = method;
     }
 
     setChunkMode(mode) {
@@ -1033,6 +1124,10 @@ export class Scroll3dEngine {
         if(options.rot != undefined) {
             object.rot = options.rot;
             didMove = true;
+        }
+
+        if(options.animation != undefined) {
+            object.animation = options.animation;
         }
 
         if(object.type == "bar") {
@@ -1253,6 +1348,55 @@ export class Scroll3dEngine {
         instance.shouldRender = true;
 
         return true;
+    }
+
+    setWater(color, zPos = 0.6) {
+
+        if(this.waterPlane) {
+            removeFromArray(this.hitTestObjects, this.waterPlane);
+
+            this.scene.remove(this.waterPlane);
+            this.waterPlane.geometry.dispose();
+            this.waterPlane.material.dispose();
+            this.waterPlane = null;
+        }
+
+        if(!color) {
+            return;
+        }
+
+        if(!this.waterTexture) {
+            if(this.waterTextureUrl) {
+                this.waterTexture = TEXTURE_LOADER.load(this.waterTextureUrl);
+                this.waterTexture.wrapS = this.waterTexture.wrapT = RepeatWrapping; 
+                this.waterTexture.colorSpace = USE_COLORSPACE;
+            } else {
+                return;
+            }
+        }
+
+        this.waterPosition = zPos;
+
+        if(!this.waterGeometry) {
+            this.waterGeometry = new PlaneGeometry(256, 256);
+        }
+
+        this.waterPlane = new Refractor(this.waterGeometry, {
+            color: color,
+            textureWidth: 1024, 
+            textureHeight: 1024,
+            shader: WaterRefractionShader,
+            depthTest: true,
+            depthWrite: false
+        });
+
+        this.waterPlane.material.uniforms.tDudv.value = this.waterTexture;
+
+        this.waterPlane.position.set(this.centerPosition.x * 2, zPos * 2, this.centerPosition.y);
+        this.waterPlane.rotation.x = - π * 0.5;
+
+        this.scene.add(this.waterPlane);
+        this.hitTestObjects.push(this.waterPlane);
     }
 
     addChunk(data) {
@@ -1671,10 +1815,26 @@ export class Scroll3dEngine {
             }
         }
 
-        let checkAgainst = instance.hitTestObjects;
+        let checkAgainst = null;
 
         if(chkOb) {
             checkAgainst = [chkOb.object];
+        } else {
+            checkAgainst = [];
+
+            for(let i = 0; i < instance.hitTestObjects.length; i++) {
+                const ob = instance.hitTestObjects[i];
+
+                if(ob == object.object || ob == object.mesh) {
+                    continue;
+                }
+
+                if(ob.isDisposed) {
+                    continue;
+                }
+
+                checkAgainst.push(ob);
+            }
         }
 
         const obTop = (object.z * 2) + object.rawTallness;
@@ -1683,9 +1843,10 @@ export class Scroll3dEngine {
         let cx = ux * 2;
         let cy = uy * 2;
 
-        if(object.type == "mesh") {
+        if(object.type == "mesh" && object.subType == "vpp") {
             cx = (ux * 2 + (object.width));
             cy = (uy * 2 + (object.height));
+            
 
             if(!object.isSymmetrical) {
                 cx = (ux + 0.5) * 2;
@@ -1970,7 +2131,13 @@ export class Scroll3dEngine {
         let maxLife = 10.0;
         let blending = "additive";
 
+        let spread = 1.0;
+
         if(options) {
+            if(options.spread != undefined) {
+                spread = options.spread;
+            }
+
             if(options.blending != undefined) {
                 blending = options.blending;
             }
@@ -2033,11 +2200,15 @@ export class Scroll3dEngine {
 
         const pSystem = instance.particleSystems[systemName];
 
+        const sMax = spread * 2;
+        const x2 = x * 2;
+        const z2 = z * 2;
+        const y2 = y * 2;
 
         for(let i = 0; i < particles; i++) {
-            const ux = (x * 2) + ((Math.random() * 2 - 1) * 1.0);
-            const uy = (z * 2) + ((Math.random() * 2 - 1) * 1.0);
-            const uz = (y * 2) + ((Math.random() * 2 - 1) * 1.0);
+            const ux = x2 + ((Math.random() * sMax - spread) * 1.0);
+            const uy = z2 + ((Math.random() * sMax - spread) * 1.0);
+            const uz = y2 + ((Math.random() * sMax - spread) * 1.0);
 
             const life = (Math.random() * 0.75 + 0.25) * maxLife;
 
@@ -2071,6 +2242,8 @@ export class Scroll3dEngine {
 
         this.showSun = false;
 
+        this.noAutoBrightness = options.noAutoBrightness || false;
+
         if(options.top) {
             this.skyTopColor = options.top;
         }
@@ -2088,19 +2261,19 @@ export class Scroll3dEngine {
                 this.sunColor = options.sun.color;
             }
 
-            if(options.sun.brightness) {
+            if(options.sun.brightness != undefined) {
                 this.hemiBrightness = options.sun.brightness;
             }
 
-            if(options.sun.show) {
-                this.showSun = true;
+            if(options.sun.show != undefined) {
+                this.showSun = options.sun.show;
             }
 
-            if(options.sun.angle) {
+            if(options.sun.angle != undefined) {
                 this.sunAngle = options.sun.angle;
             }
 
-            if(options.sun.yOffset) {
+            if(options.sun.yOffset != undefined) {
                 this.sunYoffset = options.sun.yOffset;
             }
         }
@@ -2148,11 +2321,11 @@ export class Scroll3dEngine {
             
         }
 
-        if(options.brightness) {
+        if(options.brightness != undefined) {
             this.hemiBrightness = options.brightness;
         }
         
-        if(options.angle) {
+        if(options.angle != undefined) {
             this.sunAngle = options.angle;
         }
 
@@ -2375,6 +2548,142 @@ export class Scroll3dEngine {
         instance.useDOFEffect = enabled;
 
         initPostProcessor(instance);
+    }
+
+    // Set DOF effect type: "bokeh" (default) or "tiltshift"
+    setDOFEffectType(type) {
+        const instance = this;
+        
+        if (type === "bokeh" || type === "tiltshift") {
+            instance.dofEffectType = type;
+            
+            // Reinitialize post processor with new effect type
+            if (instance.useDOFEffect) {
+                initPostProcessor(instance);
+            }
+        }
+    }
+
+    // Original bokeh DOF control methods
+    setDOFFocus(distance) {
+        const instance = this;
+        
+        if (instance.postprocessor && instance.postprocessor.bokeh) {
+            instance.postprocessor.bokeh.uniforms.focus.value = distance;
+            instance.shouldRender = true;
+        }
+    }
+
+    setDOFAperture(aperture) {
+        const instance = this;
+        
+        if (instance.postprocessor && instance.postprocessor.bokeh) {
+            instance.postprocessor.bokeh.uniforms.aperture.value = aperture;
+            instance.shouldRender = true;
+        }
+    }
+
+    setDOFMaxBlur(maxblur) {
+        const instance = this;
+        
+        if (instance.postprocessor && instance.postprocessor.bokeh) {
+            instance.postprocessor.bokeh.uniforms.maxblur.value = maxblur;
+            instance.shouldRender = true;
+        }
+    }
+
+    setDOFFocusOnObject(objectId) {
+        const instance = this;
+        const object = instance.objects[objectId];
+        
+        if (object && instance.postprocessor && instance.postprocessor.bokeh) {
+            // Calculate distance from camera to object
+            const objWorldPos = new Vector3(object.x * 2, object.z * 2, object.y * 2);
+            const distance = objWorldPos.distanceTo(instance.camera.position);
+            
+            instance.setDOFFocus(distance);
+        }
+    }
+
+    // Tilt-shift control methods
+    setTiltShiftFocus(focusHeight) {
+        const instance = this;
+        
+        if (instance.postprocessor && instance.postprocessor.tiltShift) {
+            instance.postprocessor.tiltShift.uniforms.focusHeight.value = focusHeight;
+            instance.shouldRender = true;
+        }
+    }
+
+    setTiltShiftFocusWidth(focusWidth) {
+        const instance = this;
+        
+        if (instance.postprocessor && instance.postprocessor.tiltShift) {
+            instance.postprocessor.tiltShift.uniforms.focusWidth.value = focusWidth;
+            instance.shouldRender = true;
+        }
+    }
+
+    setTiltShiftBlur(blurAmount) {
+        const instance = this;
+        
+        if (instance.postprocessor && instance.postprocessor.tiltShift) {
+            instance.postprocessor.tiltShift.uniforms.blurAmount.value = blurAmount;
+            instance.shouldRender = true;
+        }
+    }
+
+    setTiltShiftParams(focusHeight = 0.5, focusWidth = 0.3, blurAmount = 3.0) {
+        const instance = this;
+        
+        if (instance.postprocessor && instance.postprocessor.tiltShift) {
+            instance.postprocessor.tiltShift.uniforms.focusHeight.value = focusHeight;
+            instance.postprocessor.tiltShift.uniforms.focusWidth.value = focusWidth;
+            instance.postprocessor.tiltShift.uniforms.blurAmount.value = blurAmount;
+            instance.shouldRender = true;
+        }
+    }
+
+    // Enable/disable Link's Awakening style "toy" materials
+    setToyMode(enabled) {
+        const instance = this;
+
+        instance.toyModeEnabled = enabled;
+        globalToyModeEnabled = enabled;
+        
+        // Clear material cache to force regeneration with new settings
+        for(let matName in commonMaterials) {
+            delete commonMaterials[matName];
+        }
+        
+        // Update atlas material if it exists
+        if(curAtlasMaterial) {
+            setChunkTextureAtlas(cavasTextureAtlas);
+        }
+
+        if(bmLoader && enabled) {
+            bmLoader.defMaterial = "phong";
+        }
+        
+        // Don't automatically change lighting - let user control it
+        
+        instance.shouldRender = true;
+    }
+
+    // Set up optimal lighting for toy mode
+    setToyModeLighting() {
+        const instance = this;
+        
+        // Brighter, more even lighting for toy aesthetic
+        instance.setSky({
+            sun: {
+                color: "#ffffff",
+                brightness: 1.2,        // Brighter than normal
+                angle: 45               // Good angle for even lighting
+            },
+            top: "#B8E6FF",            // Slightly blue-tinted sky
+            bottom: "#ffffff"          // Bright bottom
+        });
     }
 
     setGamepadListeners(down, up, velocity, blockADL = false) {
@@ -2775,12 +3084,18 @@ class WorldObject {
         this.centerInTile = options.centerInTile || false;
         this.opacity = options.opacity || 1;
         this.type = options.type;
+        this.subType = null;
+        this.animation = options.animation || null;
         this.rot = options.rot || 0;
         this.width = options.width || 1;
         this.height = options.height || 1;
         this.rawTallness = 2;
         this.color = options.color || null;
         this.color2 = options.color2 || null;
+        this.variables = options.variables || {};
+        this.absPos = options.absPos || false;
+        this.shadow = options.shadow || false;
+        this.flickers = options.flickers || false;
 
         let defNoHit = false;
 
@@ -3102,32 +3417,35 @@ function onPadDown(id, btn) {
 
             instance.lastPadId = id;
             
-            if(button == "a" || button == "rt") {
-                const x = instance.lastWidth / 2;
-                const y = instance.lastHeight / 2;
+            if(instance.padControlMethod == "standard") {
+                if(button == "a" || button == "rt") {
+                    const x = instance.lastWidth / 2;
+                    const y = instance.lastHeight / 2;
 
-                const hitPosition = actualLocationToVirtual(instance, x, y);
+                    const hitPosition = actualLocationToVirtual(instance, x, y);
 
-                if(hitPosition) {
-                    if(instance.clickFunction) {
+                    if(hitPosition) {
+                        if(instance.clickFunction) {
     
-                        if(hitPosition.z < 0) {
-                            hitPosition.z = 0;
-                        }
+                            if(hitPosition.z < 0) {
+                                hitPosition.z = 0;
+                            }
     
-                        instance.clickFunction(
-                            buildInteractionResult(instance, {
-                                down: false
-                            }, hitPosition, x, y, "gamepad")
-                        );
+                            instance.clickFunction(
+                                buildInteractionResult(instance, {
+                                    down: false
+                                }, hitPosition, x, y, "gamepad")
+                            );
     
                         
+                        }
                     }
                 }
             }
+            
 
             if(instance.padDown) {
-                instance.padDown(id, button);
+                instance.padDown(id, button, btn);
             }
         }
     }
@@ -3153,7 +3471,7 @@ function onPadUp(id, btn) {
 
 
             if(instance.padUp) {
-                instance.padUp(id, button);
+                instance.padUp(id, button, btn);
             }
         }
     }
@@ -3169,7 +3487,10 @@ function onPadVelocity(id, axis, val) {
                 return;
             }
 
-            instance.axisStates[axis] = val;
+            if(instance.padControlMethod == "standard") {
+                instance.axisStates[axis] = val;
+            } 
+            
             instance.lastPadId = id;
 
             if(instance.padVelocity) {
@@ -3229,7 +3550,16 @@ function resetAtlasTexture() {
         matOptions.transparent = true;
     }
     
-    curAtlasMaterial = new MeshLambertMaterial(matOptions);
+    // Apply toy mode to atlas material
+    if(globalToyModeEnabled) {
+        // Use Lambert material with enhanced brightness for atlas
+        if(matOptions.map) {
+            matOptions.emissive = new Color(0x111111); // Subtle glow
+        }
+        curAtlasMaterial = new MeshLambertMaterial(matOptions);
+    } else {
+        curAtlasMaterial = new MeshLambertMaterial(matOptions);
+    }
 
     // might have to loop though all chunks and reapply the material, or all objects?!
 }
@@ -3294,6 +3624,10 @@ function setInstanceSize(instance) {
         if(instance.postprocessor.bokeh) {
             instance.postprocessor.bokeh.setSize(renderWidth, renderHeight);
         }
+
+        if(instance.postprocessor.tiltShift) {
+            instance.postprocessor.tiltShift.uniforms.resolution.value.set(renderWidth, renderHeight);
+        }
     }
 
     if(instance.effectAnaglyph) {
@@ -3357,8 +3691,8 @@ function initInstance(instance) {
     instance.scene.add(instance.vrCamHolder);
 
     rebuildInstanceRenderer(instance);
-
     
+
     // Initialize our custom optimization system
     instance.vppModelCache = new Map();
 
@@ -3418,6 +3752,11 @@ function initWorldObject(obj) {
 
     if(obj.type == "fogofwar") {
         initFogObject(obj);
+    }
+
+    if(obj.type == "bm") {
+        initBMObject(obj);
+        return;
     }
 
     if(obj.type == "vpp") {
@@ -3561,6 +3900,53 @@ function initFogObject(obj) {
 
     obj.mesh = new Mesh(geometry, material); 
     obj.object.add(obj.mesh);
+}
+
+/**
+ * Initialize the VPP object based on its properties.
+ * @param {WorldObject} obj - The world object to initialize.
+ */
+function initBMObject(obj) {
+
+    if(!obj.src) {
+        console.warn("BM object without src, skipping initialization", obj);
+        return;
+    }
+
+
+    const src = obj.src;
+
+    const loadOpts = {};
+
+    if(src.script && src.id) {
+        loadOpts.json = src;
+    } else {
+        loadOpts.url = src;
+    }
+
+    if(obj.variables) {
+        loadOpts.variables = obj.variables;
+    }
+
+    bmLoader.load(loadOpts, function(mesh) {
+        if(obj.isDisposed || !mesh) {
+            return;
+        }
+
+        obj.type = "mesh";
+        obj.subType = "bm";
+        obj.mesh = mesh;
+
+
+        finishInitMeshObject(obj);
+        initVPPLightsAndEmitters(obj);
+        removeObjFromHittest(obj.instance, obj);
+
+        if(!obj.notHittable) {
+            addObjToHittest(obj.instance, obj, 0);
+        }
+    });
+
 }
 
 /**
@@ -3721,6 +4107,7 @@ function initVPPObject(obj) {
                     }
 
                     obj.type = "mesh";
+                    obj.subType = "vpp";
                     obj.mesh = mesh;
 
                     finishInitMeshObject(obj);
@@ -3755,6 +4142,7 @@ function initVPPObject(obj) {
                     }
 
                     obj.type = "mesh";
+                    obj.subType = "vpp";
                     obj.mesh = mesh;
 
                     finishInitMeshObject(obj);
@@ -4014,7 +4402,13 @@ function initPointLightObject(obj) {
 
     obj.radius = obj.radius * 2;
 
-    obj.object.add(new PointLight(obj.color, obj.intensity, obj.radius));
+    const pl = new PointLight(obj.color, obj.intensity, obj.radius);
+
+    if(obj.shadow) {
+        pl.castShadow = true;
+    }
+
+    obj.object.add(pl);
 }
 
 function initCircleObject(obj) {
@@ -4368,13 +4762,31 @@ function normalizeObjectPosition(obj) {
     }
 
     if(obj.rot != undefined && obj.type != "instancecube") {
-        obj.object.rotation.set(0, MathUtils.degToRad(obj.rot), 0);
+
+        let rotItem = obj.object;
+
+        if(obj.type == "mesh" && obj.mesh) {
+            rotItem = obj.mesh;
+        }
+
+        if(obj.rot.x != undefined && obj.rot.y != undefined && obj.rot.z != undefined) {
+            rotItem.rotation.set(MathUtils.degToRad(obj.rot.x), MathUtils.degToRad(obj.rot.y), MathUtils.degToRad(obj.rot.z));
+        } else {
+            rotItem.rotation.set(0, MathUtils.degToRad(obj.rot), 0);
+        }
+
+        
     }
 
     if(obj.type == "pointlight") {
         let x = (obj.x * 2 + 0.5);
         let y = (obj.y * 2 + 0.5);
         let z = (obj.z * 2 + 0.5);
+
+        if(obj.absPos) {
+            x = obj.x * 2;
+            y = obj.y * 2;
+        }
 
         obj.object.position.set(x, z, y);
     }
@@ -4384,6 +4796,8 @@ function normalizeObjectPosition(obj) {
         let x = (obj.x * 2 + obj.width);
         let y = (obj.y * 2 + obj.height);
         let z = (obj.z * 2);
+
+        
 
         obj.object.rotation.set(MathUtils.degToRad(90),0,0);
 
@@ -5531,7 +5945,7 @@ function setCameraPosition(instance) {
         instance.skydome.position.y = instance.centerPosition.z * 2;
         instance.skydome.position.z = instance.centerPosition.y * 2;
 
-        normalizeSunPosition(instance);
+        
 
         instance.skydome.geometry.attributes.position.needsUpdate = true;
     }
@@ -5554,6 +5968,7 @@ function setCameraPosition(instance) {
     }
 
     updateFOVCamera(instance);
+    normalizeSunPosition(instance);
 
     instance.shouldRender = true;
 }
@@ -5709,7 +6124,7 @@ function actualLocationToVirtual(instance, x, y) {
     instance.raycaster.setFromCamera(instance.mouse, instance.camera);
 
     try {
-        const hits = instance.raycaster.intersectObjects(instance.hitTestObjects,true);
+        const hits = instance.raycaster.intersectObjects(instance.hitTestObjects, true);
         return checkHits(hits);
     } catch(ex) {
         console.log(ex);
@@ -5741,15 +6156,36 @@ function initPostProcessor(instance) {
     composer.addPass(instance.postprocessor.render);
 
     if(instance.useDOFEffect) {
-        instance.postprocessor.bokeh = new BokehPass(instance.scene, instance.camera, {
-            focus: instance.radius,
-            aperture: 0.025,
-            maxblur: 0.01,
-            width: instance.lastWidth,
-            height: instance.lastHeight
-        } );
+        if(instance.dofEffectType === "tiltshift") {
+            // Use tilt-shift effect for Link's Awakening style DOF
+            instance.postprocessor.tiltShift = new ShaderPass(TiltShiftShader);
+            instance.postprocessor.tiltShift.uniforms.resolution.value.set(instance.lastWidth, instance.lastHeight);
+            
+            // Set default tilt-shift parameters
+            instance.postprocessor.tiltShift.uniforms.focusHeight.value = 0.5;  // Center focus
+            instance.postprocessor.tiltShift.uniforms.focusWidth.value = 0.3;   // Focus area width
+            instance.postprocessor.tiltShift.uniforms.blurAmount.value = 3.0;   // Blur strength
 
-        composer.addPass(instance.postprocessor.bokeh);
+            composer.addPass(instance.postprocessor.tiltShift);
+        } else {
+            // Use traditional bokeh DOF effect (default)
+            // Calculate focus distance based on center position distance from camera
+            const focusDistance = Math.sqrt(
+                Math.pow(instance.centerPosition.x * 2, 2) + 
+                Math.pow(instance.centerPosition.y * 2, 2) + 
+                Math.pow(instance.centerPosition.z * 2, 2)
+            ) || instance.radius * 0.7;
+
+            instance.postprocessor.bokeh = new BokehPass(instance.scene, instance.camera, {
+                focus: focusDistance,
+                aperture: instance.apertureRatio || 0.05,    // Use existing aperture ratio or default
+                maxblur: 0.02,                               // Slightly more blur
+                width: instance.lastWidth,
+                height: instance.lastHeight
+            } );
+
+            composer.addPass(instance.postprocessor.bokeh);
+        }
     }
 
     if(instance.filmMode) {
@@ -6028,9 +6464,9 @@ function addSkyObjects(instance) {
     }
 
     // hemisphere light
-    instance.hemisphereLight = new HemisphereLight(instance.sunColor,instance.skyBottomColor,(instance.hemiBrightness * 2.4));
-    instance.hemisphereLight.position.set( 0, 50, 0 );
-    instance.scene.add(instance.hemisphereLight );
+    instance.hemisphereLight = new HemisphereLight(instance.sunColor, instance.skyBottomColor, (instance.hemiBrightness * 2.4));
+    instance.hemisphereLight.position.set(0, 50, 0);
+    instance.scene.add(instance.hemisphereLight);
     
     // directional light
     instance.directionalLight = new DirectionalLight(instance.sunColor, SUN_INTENSITY);
@@ -6094,9 +6530,17 @@ function normalizeSunPosition(instance) {
         let cpY = instance.centerPosition.y;
         let cpZ = instance.centerPosition.z;
 
-        let point = getPoint(cpX, cpZ, 700, degreesToRadians(instance.sunAngle));
+        let pointRad = 700;
 
-        cpY += instance.sunYoffset;
+        if(instance.toyModeEnabled) {
+            cpY -= 14;
+            pointRad = 50;
+        } else {
+            cpY += instance.sunYoffset;
+        }
+
+
+        let point = getPoint(cpX, cpZ, pointRad, degreesToRadians(instance.sunAngle));
 
         cpX = point[0];
         cpZ = point[1];
@@ -6111,27 +6555,40 @@ function normalizeSunPosition(instance) {
             instance.sunSphere.position.set(cpX, cpZ, cpY);
         }
 
-        if(!instance.skydome && instance.stardome) {
-            instance.directionalLight.castShadow = true;
-            instance.directionalLight.intensity = SUN_INTENSITY;
-        } else {
-            if(instance.sunAngle < 0 || instance.sunAngle >= 184) {
-                instance.directionalLight.castShadow = false;
-                instance.directionalLight.intensity = 0;
-            } else {
+        if(instance.noAutoBrightness) {
+            if(instance.hemiBrightness > 0) {
                 instance.directionalLight.castShadow = true;
                 instance.directionalLight.intensity = SUN_INTENSITY;
+            } else {
+                instance.directionalLight.intensity = 0;
+                instance.directionalLight.castShadow = false;
+            }
+        } else {
+            if(!instance.skydome && instance.stardome) {
+                instance.directionalLight.castShadow = true;
+                instance.directionalLight.intensity = SUN_INTENSITY;
+            } else {
+                if(instance.sunAngle < 0 || instance.sunAngle >= 184) {
+                    instance.directionalLight.castShadow = false;
+                    instance.directionalLight.intensity = 0;
+                } else {
+                    instance.directionalLight.castShadow = true;
+                    instance.directionalLight.intensity = SUN_INTENSITY;
+                }
             }
         }
 
-        
-
         instance.directionalLight.shadow.camera.far = 1600;
 
-        let sizeOut = Math.round(instance.radius * 1.5);
+        let sizeOut = instance.radius;
 
-        sizeOut = Math.round(instance.radius * 0.75);
-        
+        if(instance.toyModeEnabled) {
+            sizeOut = Math.round(instance.radius * 1.5);
+        } else {
+            sizeOut = Math.round(instance.radius * 0.75);
+        }
+
+
         instance.directionalLight.shadow.camera.left = -sizeOut;
         instance.directionalLight.shadow.camera.right = sizeOut * instance.sizeOutMultiplier;
         instance.directionalLight.shadow.camera.top = sizeOut * instance.sizeOutMultiplier;
@@ -6145,18 +6602,24 @@ function normalizeSunPosition(instance) {
 
         instance.directionalLight.shadow.camera.updateProjectionMatrix();
 
-
         if(instance.hemisphereLight) {
-            if(!instance.skydome && instance.stardome) {
-                instance.hemisphereLight.intensity = instance.hemiBrightness * 0.75;
-            } else {
-                if(instance.sunAngle < 0 || instance.sunAngle > 180) {
-                    instance.hemisphereLight.intensity = instance.hemiBrightness * 0.5;
+
+            let useHemiIntensity = (instance.hemiBrightness * 0.55) + 0.2;
+
+            if(!instance.noAutoBrightness) {
+                if(!instance.skydome && instance.stardome) {
+                    useHemiIntensity = instance.hemiBrightness * 0.75;
                 } else {
-                    instance.hemisphereLight.intensity = instance.hemiBrightness * 0.75;
+                    if(instance.sunAngle < 0 || instance.sunAngle > 180) {
+                        useHemiIntensity = instance.hemiBrightness * 0.5;
+                    } else {
+                        useHemiIntensity = instance.hemiBrightness * 0.75;
+                    }
                 }
             }
-            
+
+
+            instance.hemisphereLight.intensity = useHemiIntensity;
         }
 
         let stardomeOpacity = 0;
@@ -6179,8 +6642,8 @@ function normalizeSunPosition(instance) {
 
             }
 
-            if(instance.sunAngle <= 359 && instance.sunAngle >= 356) {
-                const diff = 359 - instance.sunAngle;
+            if(instance.sunAngle <= 360 && instance.sunAngle >= 356) {
+                const diff = 360 - instance.sunAngle;
                 stardomeOpacity = (diff / 3);
             }
 
@@ -6228,7 +6691,7 @@ function normalizeSunPosition(instance) {
     }
 
     if(instance.waterPlane) {
-        instance.waterPlane.position.set(instance.centerPosition.x * 2,1.8,instance.centerPosition.y * 2);
+        instance.waterPlane.position.set(instance.centerPosition.x * 2, instance.waterPosition * 2, instance.centerPosition.y * 2);
     }
 }
 
@@ -6401,6 +6864,7 @@ function rebuildInstanceRenderer(instance) {
 
     instance.renderer = new WebGLRenderer(rendererOptions);
     
+    
     // Adaptive pixel ratio based on device and performance
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     const adaptivePixelRatio = isMobile ? Math.min(window.devicePixelRatio, 2) : window.devicePixelRatio;
@@ -6408,6 +6872,7 @@ function rebuildInstanceRenderer(instance) {
     instance.renderer.autoClear = false;
 
     instance.renderer.outputColorSpace = USE_COLORSPACE;
+    //instance.renderer.physicallyCorrectLights = true;
     instance.renderer.gammaOutput = true;
 
     if(instance.xr) {
@@ -6532,15 +6997,35 @@ function getHexForFace(face) {
 function buildInteractionResult(instance, pointer, hitPosition, x, y, type) {
     let hitObj = null;
 
-  
     if(hitPosition.obj && hitPosition.obj != instance.plane) {
 
         let testObj = hitPosition.obj;
 
+        if(!hitPosition.instID) {
+            if(!testObj.s3dob && testObj.traverseAncestors) {
+
+                const base = testObj;
+                testObj = null;
+
+                base.traverseAncestors(function(parent) {
+
+                    if(testObj) {
+                        return;
+                    }
+
+                    if(parent.s3dob) {
+                        testObj = parent;
+                    }
+                });
+            }
+        }
         
+
+        
+        /*
         if(testObj.parent && testObj.parent.type == "Group") {
             testObj = testObj.parent;
-        }
+        }*/
         
         // first check vpp instances
         if(hitPosition.instID != null) {
@@ -6661,20 +7146,24 @@ function finishInitMeshObject(worldObject) {
     worldObject.width *= worldObject.scale;
     worldObject.height *= worldObject.scale;
 
-    worldObject.mesh.castShadow = true;
-    worldObject.mesh.receiveShadow = true;
+    let shouldCast = true;
+    let shouldReceive = true;
+
+    worldObject.mesh.castShadow = shouldCast;
+    worldObject.mesh.receiveShadow = shouldReceive;
 
     if(worldObject.mesh.children) {
-        for(let i = 0; i < worldObject.mesh.children.length; i++) {
-            const child = worldObject.mesh.children[i];
+        worldObject.mesh.traverse(function(child) {
+            child.castShadow = shouldCast;
+            child.receiveShadow = shouldReceive;
 
-            if(!child.type || child.type != "Mesh") {
-                continue;
+            
+            if(child.material && worldObject.instance.toyModeEnabled) {
+                child.material.emissive = new Color(0x111111); // Subtle glow
+                child.material.emissiveIntensity = 0.5; // Adjust intensity for better visibility
+                child.material.shininess = 400;
             }
-
-            child.castShadow = true;
-            child.receiveShadow = true;
-        }
+        });
     }
     
     worldObject.object.add(worldObject.mesh);
@@ -6853,12 +7342,10 @@ function getFinalMat(matOptions, emissive, metal, useBasic) {
         matOptions.emissive = emissive; 
     }
 
+    // Toy mode functionality removed - was causing rendering issues
     if(metal) {
-
         matOptions.roughness = 0.8;
         matOptions.metalness = 0.8;
-
-
         mat = new MeshStandardMaterial(matOptions);
     } else {
         if(useBasic) {
@@ -7088,6 +7575,11 @@ function handleInstanceRender(instance, t) {
         stepParticleSystem(system,elapsed);
     }
 
+    for(let obid in instance.objects) {
+        const ob = instance.objects[obid];
+        updateObjectLoop(instance, ob, instance.curDelta);
+    }
+
     for(let chunkId in instance.chunks) {
         if(chunkId.endsWith("water")) {
             const wMesh = instance.chunks[chunkId];
@@ -7180,7 +7672,7 @@ function handleInstanceRender(instance, t) {
                 instance.raycaster.ray.origin.setFromMatrixPosition(useController.matrixWorld );
                 instance.raycaster.ray.direction.set( 0, 0, - 1 ).applyMatrix4( tempMatrix );
     
-                const hits = instance.raycaster.intersectObjects(instance.hitTestObjects,true);
+                const hits = instance.raycaster.intersectObjects(instance.hitTestObjects, true);
                 const hitPosition = checkHits(hits);
     
                 if(hitPosition) {
@@ -7196,7 +7688,7 @@ function handleInstanceRender(instance, t) {
                         instance.hoverFunction(
                             buildInteractionResult(instance,{
                                 down: false
-                            },hitPosition,0,0,"vr")
+                            }, hitPosition, 0, 0, "vr")
                         );
                     }
                 }
@@ -7749,121 +8241,6 @@ function handleInstanceGamepadScrolling(instance) {
 }
 
 /**
- * WORKING OPTIMIZED: Enhanced VPP processing with real performance optimizations
- * Uses actual vpploader functions and smart instancing strategies
- */
-/*
-function processVPPInstancesOptimized(instance) {
-    console.log("DEBUG: processVPPInstancesOptimized called");
-    
-    const startTime = performance.now();
-    let processedChunks = 0;
-    
-    console.log("DEBUG: VPP instances to process:", Object.keys(instance.vppInstances).length);
-    
-    // Group models by similarity for better instancing
-    const modelGroups = new Map();
-    
-    for(let insName in instance.vppInstances) {
-        console.log("DEBUG: Processing VPP instance:", insName);
-        const instOb = instance.vppInstances[insName];
-        
-        console.log("DEBUG: instOb state:", {
-            exists: !!instOb,
-            loading: instOb?.loading,
-            changed: instOb?.changed,
-            hasRawMesh: !!instOb?.rawMesh,
-            itemCount: instOb?.items?.length
-        });
-        
-        if(!instOb || instOb.loading || !instOb.changed || !instOb.rawMesh) {
-            console.log("DEBUG: Skipping instance due to state");
-            continue;
-        }
-        
-        // Check processing budget
-        const elapsed = performance.now() - startTime;
-        if (elapsed > instance.vppProcessingBudget && processedChunks >= instance.maxVPPInstancesPerFrame) {
-            console.log("DEBUG: Hit processing budget, deferring to next frame");
-            break;
-        }
-        
-        // TEMPORARY: Disable optimizations to isolate the byteLength error
-        console.log("DEBUG: Skipping geometry optimizations to isolate error");
-        let geometry = instOb.rawMesh.geometry;
-        let useOptimizedGeometry = false;
-        
-        // Validate the original geometry to see if it's already broken
-        if(!geometry) {
-            console.error("DEBUG: instOb.rawMesh.geometry is null/undefined for", insName);
-            continue;
-        }
-        
-        if(!geometry.getAttribute('position')) {
-            console.error("DEBUG: Geometry missing position attribute for", insName);
-            continue;
-        }
-        
-        if(!geometry.getAttribute('position').array) {
-            console.error("DEBUG: Position attribute missing array for", insName);
-            continue;
-        }
-        
-        console.log("DEBUG: Geometry validation passed for", insName, "- vertices:", geometry.getAttribute('position').count);
-        
-        // OPTIMIZATION 3: Enhanced instancing with geometry sharing
-        const modelKey = getGeometryHash(instOb.rawMesh.geometry);
-        if(!modelGroups.has(modelKey)) {
-            modelGroups.set(modelKey, {
-                geometry: instOb.rawMesh.geometry,
-                material: instOb.rawMesh.material,
-                instances: [],
-                instObs: []
-            });
-        }
-        
-        modelGroups.get(modelKey).instObs.push(instOb);
-        
-        // Process with enhanced system
-        setupVPPInstanceObjectOptimized(instance, instOb, useOptimizedGeometry);
-        processedChunks++;
-    }
-    
-    const totalTime = performance.now() - startTime;
-    console.log(`DEBUG: VPP processing completed in ${totalTime.toFixed(2)}ms, processed ${processedChunks} chunks`);
-    
-    if(modelGroups.size > 0) {
-        console.log(`DEBUG: Found ${modelGroups.size} unique geometries for sharing`);
-    }
-}*/
-
-/**
- * Enhanced VPP instance setup with optimizations
- */
-/*
-function setupVPPInstanceObjectOptimized(instance, instOb, isOptimized = false) {
-    // Use the existing setup but with enhancements
-    setupVPPInstanceObject(instance, instOb);
-    
-    if(isOptimized) {
-        console.log("DEBUG: Used optimized geometry for instance");
-    }
-}*/
-
-/**
- * Create a hash of geometry for sharing identical models
- */
-/*
-function getGeometryHash(geometry) {
-    if(!geometry || !geometry.attributes) return "unknown";
-    
-    const posCount = geometry.attributes.position?.count || 0;
-    const indexCount = geometry.index?.count || 0;
-    
-    return `geom_${posCount}_${indexCount}`;
-}*/
-
-/**
  * OLD VPP processing system as fallback
  */
 function processVPPInstancesOld(instance) {
@@ -8345,7 +8722,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
     const canvasItems = {
         tx: document.createElement("canvas"),
-        bm: null,
+        bm: document.createElement("canvas"),
         lm: null
     };
 
@@ -8354,12 +8731,14 @@ async function doWorkCanvasChunk(instance, data, callback) {
     canvasItems.tx.width = atlasWidth;
     canvasItems.tx.height = atlasHeight;
 
+    canvasItems.bm.width = atlasWidth;
+    canvasItems.bm.height = atlasHeight;
 
     const ctx = canvasItems.tx.getContext("2d");
+    const ctxBM = canvasItems.bm.getContext("2d");
 
     let sideIndicies = {};
     let sideIdxCtr = 0;
-
 
     for(let x = 0; x < data.data.length; x++) {
         for(let z = 0; z < data.data.length; z++) {
@@ -8379,11 +8758,54 @@ async function doWorkCanvasChunk(instance, data, callback) {
                 const dx = x * useTextureSize;
                 const dy = z * useTextureSize;
 
-                const topImg = await loadTileImageAsync(useTop);
+                const topImg = await loadTileImageAsync(useTop, "default");
+                const topBM = await loadTileImageAsync(useTop, "bump");
 
                 if(topImg) {
                     ctx.drawImage(topImg, dx, dy, useTextureSize, useTextureSize);
 
+                    if(topBM) {
+                        ctxBM.drawImage(topBM, dx, dy, useTextureSize, useTextureSize);
+                    }
+
+                    // masks
+
+                    if(obj.masks) {
+                        if(obj.masks.top) {
+                            await drawMaskedTexture(ctx, obj.masks.top, "side", dx, dy, useTextureSize, MASK_ROTS.top);
+                        }
+
+                        if(obj.masks.bottom) {
+                            await drawMaskedTexture(ctx, obj.masks.bottom, "side", dx, dy, useTextureSize, MASK_ROTS.bottom);
+                        }
+
+                        if(obj.masks.left) {
+                            await drawMaskedTexture(ctx, obj.masks.left, "side", dx, dy, useTextureSize, MASK_ROTS.left);
+                        }
+
+                        if(obj.masks.right) {
+                            await drawMaskedTexture(ctx, obj.masks.right, "side", dx, dy, useTextureSize, MASK_ROTS.right);
+                        }
+
+
+
+                        if(obj.masks.bottomRight) {
+                            await drawMaskedTexture(ctx, obj.masks.bottomRight, "corner", dx, dy, useTextureSize, MASK_ROTS.right);
+                        }
+
+                        if(obj.masks.bottomLeft) {
+                            await drawMaskedTexture(ctx, obj.masks.bottomLeft, "corner", dx, dy, useTextureSize, MASK_ROTS.bottom);
+                        }
+
+                        if(obj.masks.topLeft) {
+                            await drawMaskedTexture(ctx, obj.masks.topLeft, "corner", dx, dy, useTextureSize, MASK_ROTS.left);
+                        }
+
+                        if(obj.masks.topRight) {
+                            await drawMaskedTexture(ctx, obj.masks.topRight, "corner", dx, dy, useTextureSize, MASK_ROTS.top);
+                        }
+
+                    }
                 }
             }
 
@@ -8400,12 +8822,10 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
                 if(sideImg) {
                     ctx.drawImage(sideImg, dx, dy, useTextureSize, useTextureSize);
-
                 }
             }
         }
     }
-
 
     const geometry = new BufferGeometry();
 
@@ -8413,8 +8833,6 @@ async function doWorkCanvasChunk(instance, data, callback) {
     const normals = [];
     const uvs = [];
     const indices = [];
-    
-
 
     const txPerW = useTextureSize / atlasWidth;
     const txPerH = useTextureSize / atlasHeight;
@@ -8436,14 +8854,11 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
             const uv = imgCoordToUV(imgX, imgY, atlasWidth, atlasHeight, txPerH);
 
-
             const topTxX = uv.u;
             const topTxY = uv.v;
-            
 
             let sideTxX = topTxX;
             let sideTxY = topTxY;
-
 
             const useSide = obj.middle || defTx.middle || null;
 
@@ -8462,11 +8877,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                 
                 sideTxX = uv.u;
                 sideTxY = uv.v;
-
-
             }
-
-            
 
             for(let y = 0; y < WORLD_HEIGHT; y++) {
                 // there is ground here
@@ -8578,42 +8989,9 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
 
                                     if(uvRow == 2 || !hasSide) {
-
                                         txX = topTxX;
                                         txY = topTxY;
-
-                                        //let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
-                                        //let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / atlasHeight;
-
-                                        /*
-                                        let uvx = topTxX + uv[0];
-                                        let uvy = topTxY + uv[1];
-
-                                        uvs.push(uvx, uvy);*/
-
-                                        //uvs.push(topU, topV, topU2, topV, topU2, topV2, topU, topV, topU2, topV2, topU, topV2);
-                                    } else {
-
-                                        /*
-                                        let uvx = sideTxX + uv[0];
-                                        let uvy = sideTxY + uv[1];*/
-
-
-                                        /*
-                                        uvs.push(
-                                            sideU, sideYOffset,
-                                            sideU2, sideYOffset,
-                                            sideU2, sideYOffset + sideVScale,
-                                            sideU, sideYOffset,
-                                            sideU2, sideYOffset + sideVScale,
-                                            sideU, sideYOffset + sideVScale
-                                        );*/
                                     }
-
-                                    /*
-                                    const uvx = (txX - uv[0] * txPerW) + txPerW;
-                                    const uvy = (txY - uv[1] * txPerH) + txPerH;
-                                    */
 
                                     const xInTile = uv[0] * txPerW;
                                     const yInTile = uv[1] * txPerH;
@@ -8622,31 +9000,8 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                     const uvy = txY + yInTile;
 
                                     uvs.push(uvx, uvy);
-
-
-                                    /*
-                                    let tx = useMid;
-                                    
-                                    if(uvRow == 2) {
-                                        tx = useTop;
-                                    }
-
-                                    if(uvRow == 1) {
-                                        tx = useBottom;
-                                    }
-
-                                    let textureRow = 0;
-
-                                    let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
-
-                                    let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
-
-                                    let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
-
-                                    uvs.push(uvx,uvy);*/
                                 }
 
-                                
                                 indices.push(
                                     ndx, ndx + 1, ndx + 2,
                                     ndx + 2, ndx + 1, ndx + 3
@@ -8668,39 +9023,6 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                         positions.push(pos[0] + x, uyy, pos[2] + z);
                                         normals.push(...dir);
 
-                                        /*
-                                        if(hasSide) {
-                                            uvs.push(
-                                                sideU, sideYOffset,
-                                                sideU2, sideYOffset,
-                                                sideU2, sideYOffset + sideVScale,
-                                                sideU, sideYOffset,
-                                                sideU2, sideYOffset + sideVScale,
-                                                sideU, sideYOffset + sideVScale
-                                            );
-                                        } else {
-                                            uvs.push(topU, topV, topU2, topV, topU2, topV2, topU, topV, topU2, topV2, topU, topV2);
-                                        }*/
-
-                                        
-
-
-                                        /*
-                                        let tx = useBottom;
-
-                                        let textureRow = 0;
-    
-                                        let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
-
-                                        let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
-    
-                                        let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
-    
-                                        uvs.push(uvx,uvy);*/
-
-
-                                        //let uvx = (x +   uv[0]) * useTextureSize / atlasWidth;
-                                        //let uvy = 1 - (z + 1 - uv[1]) * useTextureSize / useTextureSize;
 
                                         let uvx = topTxX + uv[0];
                                         let uvy = topTxY + uv[1];
@@ -8708,11 +9030,10 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                         uvs.push(uvx, uvy);
                                     }
     
-                                    /*
                                     indices.push(
                                         ndx, ndx + 1, ndx + 2,
                                         ndx + 2, ndx + 1, ndx + 3
-                                    );*/
+                                    );
                                 }
                             }
                         }
@@ -8721,6 +9042,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
             }
         }
     }
+
 
     const positionNumComponents = 3;
     const normalNumComponents = 3;
@@ -8755,7 +9077,33 @@ async function doWorkCanvasChunk(instance, data, callback) {
     diffuseTexture.colorSpace = USE_COLORSPACE;
 
 
-    const material = new MeshLambertMaterial({ map: diffuseTexture });
+    // ==== CREATE TEXTURE & MESH ====
+    const bmTexture = new CanvasTexture(canvasItems.bm);
+    bmTexture.wrapS = RepeatWrapping;
+    bmTexture.wrapT = RepeatWrapping;
+    bmTexture.anisotropy = instance.renderer.capabilities.getMaxAnisotropy();
+    bmTexture.minFilter = LinearMipmapLinearFilter;
+    bmTexture.generateMipmaps = true;
+    bmTexture.colorSpace = USE_COLORSPACE;
+
+    let material = null;
+
+    // Create material for chunk - apply toy mode plastic look when enabled
+    if(instance.toyModeEnabled) {
+
+        material = new MeshPhongMaterial({
+            map: diffuseTexture,
+            color: instance.sunColor,                   // keep base texture colors true
+            specular: LightenDarkenColor(instance.sunColor, -230),     // strong white specular for shiny highlights
+            shininess: 500,
+            bumpMap: bmTexture,
+            bumpScale: 0.45
+        });
+
+    } else {
+        material = new MeshLambertMaterial({ map: diffuseTexture });
+    }
+    
 
     const mesh = new Mesh(geometry, material);
 
@@ -8765,64 +9113,316 @@ async function doWorkCanvasChunk(instance, data, callback) {
     mesh.position.set(meshX, 0, meshY);
 
     mesh.receiveShadow = true;
-
+    mesh.castShadow = true;
 
     instance.removeChunk(data.x, data.y, rOrder, 500);
 
     instance.chunks[chunkId] = mesh;
-
     instance.scene.add(mesh);
     instance.hitTestObjects.push(mesh);
 
     clearAllParticleSystems(instance);
 
     if(hasWater && instance.waterTexture && !instance.waterPlane) {
-
-        if(!instance.waterGeometry) {
-            instance.waterGeometry = new PlaneGeometry(256, 256);
-        }
-
-        instance.waterPlane = new Refractor(instance.waterGeometry, {
-            color: waterColor,
-            textureWidth: 1024, 
-            textureHeight: 1024,
-            shader: WaterRefractionShader,
-            depthTest: true,
-            depthWrite: false
-        });
-
-        instance.waterPlane.material.uniforms.tDudv.value = instance.waterTexture;
-
-        instance.waterPlane.position.set(instance.centerPosition.x * 2, 1.8, instance.centerPosition.y);
-        instance.waterPlane.rotation.x = - π * 0.5;
-
-        instance.scene.add(instance.waterPlane);
-        instance.hitTestObjects.push(instance.waterPlane);
+        instance.setWater(waterColor, 1.8);
     }
 
     callback();
 }
 
-function loadTileImageAsync(src) {
+function loadTileImageAsync(name, which = "default") {
 
-    const txHash = hash(src);
+    let mapProp = "src";
 
-    if(tileTextures[txHash]) {
+    if(which == "bump") {
+        mapProp = "bumpmap";
+    }
+
+    if(which == "light") {
+        mapProp = "lightmap";
+    }
+
+    const txDef = cavasTextureAtlas[name];
+
+    if(!txDef) {
         return new Promise((resolve) => {
-            resolve(tileTextures[txHash]);
+            resolve(null);
         });
     }
 
+    const src = txDef[mapProp];
+
+    if(!src) {
+        return new Promise((resolve) => {
+            resolve(null);
+        });
+    }
+
+    const txId = name + "." + mapProp;
+
+    if(tileTextures[txId]) {
+        return new Promise((resolve) => {
+            resolve(tileTextures[txId]);
+        });
+    }
+
+    return new Promise((resolve) => {
+        loadImageAsync(src).then(function(img) {
+            tileTextures[txId] = img;
+            resolve(img);
+        });
+    });
+
+    
+}
+
+export function loadImageAsync(src) {
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
-            tileTextures[txHash] = img;
             resolve(img);
         };
         img.onerror = (err) => reject(err);
         img.src = src;
     });
 }
+
+async function generateMask(type = "side", blendWidth = 0.2, soften = 1.5) {
+    const maskName = `s3dgrad_${type}_${blendWidth}_${soften}`;
+    if (tileTextures[maskName]) {
+        return tileTextures[maskName];
+    }
+
+    genTexCanvas.width = useTextureSize;
+    genTexCanvas.height = useTextureSize;
+
+    const imgData = genTexContext.createImageData(useTextureSize, useTextureSize);
+    const data = imgData.data;
+
+    const total = useTextureSize - 1;
+    const fadeStart = 1 - blendWidth; // where fade begins (normalized)
+
+    for (let y = 0; y < useTextureSize; y++) {
+        for (let x = 0; x < useTextureSize; x++) {
+            let dist;
+
+            if (type === "side") {
+                // side: horizontal distance 0 → 1
+                dist = x / total;
+            } else if (type === "corner") {
+                // corner: diagonal distance 0 → 1
+                dist = (x + y) / (2 * total);
+            } else {
+                dist = 1; // default fully opaque
+            }
+
+            let alpha;
+            if (dist < fadeStart) {
+                alpha = 0; // fully transparent zone
+            } else {
+                let fadeProgress = (dist - fadeStart) / blendWidth;
+                alpha = Math.min(Math.pow(fadeProgress, soften), 1);
+            }
+
+            let i = (y * useTextureSize + x) * 4;
+            data[i] = data[i + 1] = data[i + 2] = 255; // white base
+            data[i + 3] = Math.floor(alpha * 255);     // alpha channel
+        }
+    }
+
+    genTexContext.putImageData(imgData, 0, 0);
+    const src = genTexCanvas.toDataURL("image/png");
+
+    const img = await loadImageAsync(src);
+    tileTextures[maskName] = img;
+    return img;
+}
+
+
+async function generateSideMask() {
+
+    const maskName = "s3dgradside";
+
+    if(tileTextures[maskName]) {
+        return tileTextures[maskName];
+    }
+
+    genTexCanvas.width = useTextureSize;
+    genTexCanvas.height = useTextureSize;
+
+    const imgData = genTexContext.createImageData(useTextureSize, useTextureSize);
+    const data = imgData.data;
+
+    let transparentPortion = 0.8; // 80% fully transparent
+    let fadeStart = useTextureSize * transparentPortion;
+
+    for(let y = 0; y < useTextureSize; y++) {
+        for(let x = 0; x < useTextureSize; x++) {
+            let alpha;
+            if (x < fadeStart) {
+                alpha = 0; // fully transparent region
+            } else {
+                let fadeProgress = (x - fadeStart) / (useTextureSize - fadeStart);
+                alpha = fadeProgress; // 0 → 1 over the fade zone
+            }
+
+            //alpha = Math.pow(fadeProgress, 1.5); // tweak 1.0 (linear) → 3.0 (very soft)
+
+            let i = (y * useTextureSize + x) * 4;
+            data[i] = data[i + 1] = data[i + 2] = 255;
+            data[i + 3] = Math.floor(alpha * 255);
+        }
+    }
+
+    genTexContext.putImageData(imgData, 0, 0);
+    const src = genTexCanvas.toDataURL("image/png");
+
+
+    const img = await loadImageAsync(src);
+    tileTextures[maskName] = img;
+
+
+    return img;
+}
+
+async function generateCornerMask() {
+    genTexCanvas.width = useTextureSize;
+    genTexCanvas.height = useTextureSize;
+
+    const imgData = genTexContext.createImageData(useTextureSize, useTextureSize);
+    const data = imgData.data;
+
+    for(let y = 0; y < useTextureSize; y++) {
+        for(let x = 0; x < useTextureSize; x++) {
+            let alpha = (x + y) / (2 * (useTextureSize - 1));
+            let i = (y * useTextureSize + x) * 4;
+            data[i] = data[i + 1] = data[i + 2] = 255;
+            data[i + 3] = Math.floor(alpha * 255);
+        }
+    }
+
+    genTexContext.putImageData(imgData, 0, 0);
+    const src = genTexCanvas.toDataURL("image/png");
+
+
+    const img = await loadImageAsync(src);
+    return img;
+}
+
+async function generateNoiseMask() {
+    genTexCanvas.width = useTextureSize;
+    genTexCanvas.height = useTextureSize;
+
+    const imgData = genTexContext.createImageData(useTextureSize, useTextureSize);
+    const data = imgData.data;
+
+    for (let i = 0; i < useTextureSize * useTextureSize; i++) {
+        let v = Math.floor(Math.random() * 255);
+        data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = 255;
+        data[i * 4 + 3] = v;
+    }
+
+    genTexContext.putImageData(imgData, 0, 0);
+    const src = genTexCanvas.toDataURL("image/png");
+
+
+    const img = await loadImageAsync(src);
+    return img;
+}
+
+async function drawMaskedTexture(ctx, neighborTex, mask, x, y, size, rotation) {
+
+    const maskName = neighborTex + "." + mask + "." + rotation.toFixed(3);
+
+    if(tileTextures[maskName]) {
+        ctx.drawImage(tileTextures[maskName], x, y, size, size);
+        return;
+    }
+
+    const neighborTexture = await loadTileImageAsync(neighborTex);
+
+    if(!neighborTexture) {
+        return;
+    }
+
+    let maskTx = null;
+
+    if(mask == "side") {
+        maskTx = await generateMask("side", 0.35);
+    }
+
+    if(mask == "corner") {
+        maskTx = await generateMask("corner", 0.18);
+    }
+    
+    if(!maskTx) {
+        return;
+    }
+
+    genTexCanvas.width = size;
+    genTexCanvas.height = size;
+
+    genTexContext.drawImage(neighborTexture, 0, 0, size, size);
+
+    genTexContext.globalCompositeOperation = "destination-in";
+
+    genTexContext.save();
+    genTexContext.translate(size / 2, size / 2);
+    genTexContext.rotate(rotation);
+
+    genTexContext.drawImage(maskTx, -size /2, -size / 2, size, size);
+    genTexContext.restore();
+
+    
+    
+
+    genTexContext.globalCompositeOperation = "source-over";
+
+    const src = genTexCanvas.toDataURL("image/png");
+
+    const img = await loadImageAsync(src);
+    tileTextures[maskName] = img;
+
+
+    //return img;
+
+    ctx.drawImage(img, x, y, size, size);
+
+    /*
+
+    ctx.save();
+    ctx.translate(x + size/2, y + size/2);
+    ctx.rotate(rotation);
+
+    ctx.drawImage(mask, -size/2, -size/2, size, size);
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.drawImage(neighborTex, x, y, size, size);
+    ctx.restore();*/
+
+    //ctx.drawImage(neighborTex, x, y, size, size);
+
+    
+
+    /*
+    //ctx.save();
+    //ctx.translate(x + size/2, y + size/2);
+    //ctx.rotate(rotation);
+
+    // --- Pass 1: Draw the neighbor tile ---
+    ctx.drawImage(neighborTex, -size/2, -size/2, size, size);
+
+    // --- Pass 2: Apply the mask ---
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.drawImage(mask, -size/2, -size/2, size, size);
+
+    // --- Restore normal drawing mode ---
+    ctx.restore();
+    ctx.globalCompositeOperation = "source-over";*/
+}
+
 
 function imgCoordToUV(x, y, width, height, txPerH) {
 
@@ -8834,14 +9434,51 @@ function imgCoordToUV(x, y, width, height, txPerH) {
     };
 }
 
+export function setChunkTextureAtlas(atlas) {
+    cavasTextureAtlas = atlas;
+    tileTextures = {};
+}
+
+function updateObjectLoop(instance, obj, delta) {
+    if(obj.type == "pointlight") {
+        if(obj.flickers) {
+            const light = obj.object.children[0];
+
+            if(light) {
+                // set the light between 80% and 120% of its intensity setting
+                light.intensity = obj.intensity * (0.8 + Math.random() * 0.4);
+            }
+        }
+    }
+
+    if(obj.subType && obj.subType == "bm" && obj.mesh) {
+
+        if(obj.animation) {
+            if(obj.mesh.bmDat.animations[obj.animation]) {
+                obj.mesh.bmDat.animation = obj.animation;
+            } else {
+                obj.mesh.bmDat.animation = null;
+            }
+        } else {
+            obj.mesh.bmDat.animation = null;
+        }
+
+        if(obj.mesh.animate) {
+            obj.mesh.animate(delta);
+        }
+    }
+}
+
 export default {
     getInstance,
     getAllInstances,
     getOffset,
     forceResize,
     setTextureSize,
+    setChunkTextureAtlas,
     setMobileOptimizedTextures,
     setUseSimplifiedAtlas,
+    loadImageAsync,
     DEF_PHI,
     DEF_THETA,
     DEF_RADIUS,
