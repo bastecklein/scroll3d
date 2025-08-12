@@ -4765,7 +4765,7 @@ function normalizeObjectPosition(obj) {
 
         let rotItem = obj.object;
 
-        if(obj.type == "mesh" && obj.mesh) {
+        if(obj.type == "mesh" && obj.mesh && obj.subType != "vpp") {
             rotItem = obj.mesh;
         }
 
