@@ -3084,7 +3084,7 @@ class WorldObject {
         this.centerInTile = options.centerInTile || false;
         this.opacity = options.opacity || 1;
         this.type = options.type;
-        this.subType = null;
+        this.subType = options.subType || null;
         this.animation = options.animation || null;
         this.rot = options.rot || 0;
         this.width = options.width || 1;
