@@ -32,7 +32,8 @@
         "gamepadhelper": "git+ssh://git@github.com:bastecklein/gamepadhelper.git#main",
         "vpploader": "git+ssh://git@github.com:bastecklein/vpploader.git#main",
         "three": "*",
-        "ppp-tools": "git+ssh://git@github.com:bastecklein/ppp-tools.git#main"
+        "ppp-tools": "git+ssh://git@github.com:bastecklein/ppp-tools.git#main",
+        "bmloader": "git+ssh://git@github.com:bastecklein/bmloader.git#main"
     },
     "devDependencies": {
         "webpack": "*",
