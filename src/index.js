@@ -86,10 +86,9 @@ import { FilmPass } from "three/examples/jsm/postprocessing/FilmPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { GammaCorrectionShader } from "three/addons/shaders/GammaCorrectionShader.js";
 
-import { VPPLoader, generateLODGeometry, optimizeGeometry } from "vpploader";
+import { VPPLoader } from "vpploader";
 import { renderPPP } from "ppp-tools";
-import { ceilPowerOfTwo } from "three/src/math/MathUtils.js";
-import { call, instance } from "three/tsl";
+
 
 export const DEF_PHI = 75;
 export const DEF_THETA = 50;
@@ -1389,14 +1388,31 @@ export class Scroll3dEngine {
 
         this.waterPlane = new Refractor(this.waterGeometry, {
             color: color,
-            textureWidth: 64, 
-            textureHeight: 64,
+            textureWidth: 1024, 
+            textureHeight: 1024,
             shader: WaterRefractionShader,
             depthTest: true,
-            depthWrite: false
+            depthWrite: false,
+            clipBias: 0.03 // Reduced clip bias to prevent artifacts
         });
 
-        this.waterPlane.material.uniforms.tDudv.value = this.waterTexture;
+        // Ensure texture is loaded before assigning
+        if(this.waterTexture.image && this.waterTexture.image.complete) {
+            this.waterPlane.material.uniforms.tDudv.value = this.waterTexture;
+        } else {
+            // Wait for texture to load
+            this.waterTexture.addEventListener('load', () => {
+                if(this.waterPlane && this.waterPlane.material) {
+                    this.waterPlane.material.uniforms.tDudv.value = this.waterTexture;
+                    this.shouldRender = true;
+                }
+            });
+        }
+
+        // Set texture matrix for proper refraction
+        if(this.waterPlane.material.uniforms.textureMatrix) {
+            this.waterPlane.material.uniforms.textureMatrix.value = this.waterPlane.getRenderTarget().texture.matrix;
+        }
 
         this.waterPlane.position.set(this.centerPosition.x * 2, zPos * 2, this.centerPosition.y);
         this.waterPlane.rotation.x = - π * 0.5;
@@ -3723,7 +3739,7 @@ function initInstance(instance) {
     instance.mouse = new Vector2();
     instance.raycaster = new Raycaster();
 
-    if(Refractor && WaterRefractionShader && instance.waterTextureUrl) {
+    if(instance.waterTextureUrl) {
         instance.waterTexture = TEXTURE_LOADER.load(instance.waterTextureUrl);
         instance.waterTexture.wrapS = instance.waterTexture.wrapT = RepeatWrapping; 
         instance.waterTexture.colorSpace = USE_COLORSPACE;
@@ -8096,6 +8112,11 @@ function doPostProcessing(instance) {
         }
 
         instance.waterPlane.material.uniforms.time.value += globalClock.getDelta();
+        
+        // Update texture matrix for proper refraction when camera moves
+        if(instance.waterPlane.material.uniforms.textureMatrix) {
+            instance.waterPlane.material.uniforms.textureMatrix.value = instance.waterPlane.getRenderTarget().texture.matrix;
+        }
     }
 
     instance.camera.layers.set(0);
