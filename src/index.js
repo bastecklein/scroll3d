@@ -840,6 +840,8 @@ export class Scroll3dEngine {
         this.lightsActive = true;
         this.noSky = false;
 
+        this.zoomLocked = false;
+
         this.edgeScrolling = false;
         this.edgeScrollDir = null;
 
@@ -1019,6 +1021,10 @@ export class Scroll3dEngine {
 
     resize() {
         setInstanceSize(this);
+    }
+
+    setZoomLocked(locked) {
+        this.zoomLocked = locked;
     }
 
     setPadControlMethod(method) {
@@ -8500,6 +8506,10 @@ function clearPointers(instance) {
 }
 
 function doZoom(instance, amount) {
+
+    if(instance.zoomLocked) {
+        return;
+    }
 
     let radius = instance.radius;
 
