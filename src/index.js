@@ -1384,13 +1384,13 @@ export class Scroll3dEngine {
         this.waterPosition = zPos;
 
         if(!this.waterGeometry) {
-            this.waterGeometry = new PlaneGeometry(256, 256);
+            this.waterGeometry = new PlaneGeometry(64, 64);
         }
 
         this.waterPlane = new Refractor(this.waterGeometry, {
             color: color,
-            textureWidth: 1024, 
-            textureHeight: 1024,
+            textureWidth: 64, 
+            textureHeight: 64,
             shader: WaterRefractionShader,
             depthTest: true,
             depthWrite: false
