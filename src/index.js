@@ -1393,26 +1393,11 @@ export class Scroll3dEngine {
             shader: WaterRefractionShader,
             depthTest: true,
             depthWrite: false,
-            clipBias: 0.03 // Reduced clip bias to prevent artifacts
+            clipBias: 0.05 // Adjust clip bias to reduce artifacts
         });
 
-        // Ensure texture is loaded before assigning
-        if(this.waterTexture.image && this.waterTexture.image.complete) {
-            this.waterPlane.material.uniforms.tDudv.value = this.waterTexture;
-        } else {
-            // Wait for texture to load
-            this.waterTexture.addEventListener('load', () => {
-                if(this.waterPlane && this.waterPlane.material) {
-                    this.waterPlane.material.uniforms.tDudv.value = this.waterTexture;
-                    this.shouldRender = true;
-                }
-            });
-        }
 
-        // Set texture matrix for proper refraction
-        if(this.waterPlane.material.uniforms.textureMatrix) {
-            this.waterPlane.material.uniforms.textureMatrix.value = this.waterPlane.getRenderTarget().texture.matrix;
-        }
+        this.waterPlane.material.uniforms.tDudv.value = this.waterTexture;
 
         this.waterPlane.position.set(this.centerPosition.x * 2, zPos * 2, this.centerPosition.y);
         this.waterPlane.rotation.x = - π * 0.5;
@@ -8112,11 +8097,6 @@ function doPostProcessing(instance) {
         }
 
         instance.waterPlane.material.uniforms.time.value += globalClock.getDelta();
-        
-        // Update texture matrix for proper refraction when camera moves
-        if(instance.waterPlane.material.uniforms.textureMatrix) {
-            instance.waterPlane.material.uniforms.textureMatrix.value = instance.waterPlane.getRenderTarget().texture.matrix;
-        }
     }
 
     instance.camera.layers.set(0);
