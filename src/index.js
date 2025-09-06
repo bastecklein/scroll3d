@@ -76,6 +76,8 @@ import {
 } from "three";
 
 import { XRControllerModelFactory } from "three/addons/webxr/XRControllerModelFactory.js";
+import { Refractor } from "three/examples/jsm/objects/Refractor.js";
+import { WaterRefractionShader } from "three/addons/shaders/WaterRefractionShader.js";
 import { AnaglyphEffect } from "three/addons/effects/AnaglyphEffect.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
@@ -1371,7 +1373,7 @@ export class Scroll3dEngine {
         if(!this.waterTexture) {
             if(this.waterTextureUrl) {
                 this.waterTexture = TEXTURE_LOADER.load(this.waterTextureUrl);
-                this.waterTexture.wrapS = this.waterTexture.wrapT = RepeatWrapping;
+                this.waterTexture.wrapS = this.waterTexture.wrapT = RepeatWrapping; 
                 this.waterTexture.colorSpace = USE_COLORSPACE;
             } else {
                 return;
@@ -1384,58 +1386,43 @@ export class Scroll3dEngine {
             this.waterGeometry = new PlaneGeometry(64, 64);
         }
 
-        // Create custom water shader material for top-down view
-        const waterMaterial = new ShaderMaterial({
-            uniforms: {
-                time: { value: 0.0 },
-                waterColor: { value: new Color(color) },
-                normalMap: { value: this.waterTexture },
-                opacity: { value: 1.0 }
-            },
-            vertexShader: `
-                varying vec2 vUv;
-                varying vec3 vPosition;
-
-                void main() {
-                    vUv = uv;
-                    vPosition = position;
-                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                }
-            `,
-            fragmentShader: `
-                uniform float time;
-                uniform vec3 waterColor;
-                uniform sampler2D normalMap;
-                uniform float opacity;
-
-                varying vec2 vUv;
-                varying vec3 vPosition;
-
-                void main() {
-                    // Animate UV coordinates for water movement
-                    vec2 animatedUv = vUv + vec2(time * 0.05, time * 0.03);
-
-                    // Sample normal map for ripple effect
-                    vec3 normal = texture2D(normalMap, animatedUv).rgb * 2.0 - 1.0;
-
-                    // Create simple ripple effect
-                    float ripple = sin(vPosition.x * 0.1 + time) * cos(vPosition.z * 0.1 + time) * 0.1;
-
-                    // Mix water color with ripple effect
-                    vec3 finalColor = waterColor + normal * 0.1 + ripple;
-
-                    gl_FragColor = vec4(finalColor, opacity);
-                }
-            `,
-            transparent: true,
+        this.waterPlane = new Refractor(this.waterGeometry, {
+            color: color,
+            textureWidth: 1024, 
+            textureHeight: 1024,
+            shader: WaterRefractionShader,
+            depthTest: true,
             depthWrite: false,
-            side: DoubleSide
+            clipBias: 0.003
         });
 
-        this.waterPlane = new Mesh(this.waterGeometry, waterMaterial);
+
+        this.waterPlane.material.uniforms.tDudv.value = this.waterTexture;
 
         this.waterPlane.position.set(this.centerPosition.x * 2, zPos * 2, this.centerPosition.y);
-        this.waterPlane.rotation.x = -π * 0.5;
+        this.waterPlane.rotation.x = - π * 0.5;
+
+        // Ensure offscreen pass clears and isn't affected by XR/composer state
+        try {
+            const originalBeforeRender = this.waterPlane.onBeforeRender;
+            this.waterPlane.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
+                const prevAutoClear = renderer.autoClear;
+                const wasXrEnabled = renderer.xr && renderer.xr.enabled;
+                // force clear for refractor render target and disable XR
+                renderer.autoClear = true;
+                if (wasXrEnabled) {
+                    renderer.xr.enabled = false;
+                }
+                try {
+                    originalBeforeRender.call(this.waterPlane, renderer, scene, camera, geometry, material, group);
+                } finally {
+                    if (wasXrEnabled) {
+                        renderer.xr.enabled = true;
+                    }
+                    renderer.autoClear = prevAutoClear;
+                }
+            };
+        } catch(e) { /* noop safeguard */ }
 
         this.scene.add(this.waterPlane);
         this.hitTestObjects.push(this.waterPlane);
@@ -6915,7 +6902,8 @@ function rebuildInstanceRenderer(instance) {
 
     instance.renderer.outputColorSpace = USE_COLORSPACE;
     //instance.renderer.physicallyCorrectLights = true;
-    instance.renderer.gammaOutput = true;
+    // Avoid deprecated/double-encoding path that can darken offscreen targets
+    // instance.renderer.gammaOutput = true;
 
     if(instance.xr) {
         instance.renderer.xr.enabled = instance.xr;
