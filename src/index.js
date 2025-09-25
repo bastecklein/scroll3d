@@ -2657,7 +2657,21 @@ export class Scroll3dEngine {
         const instance = this;
         
         if (instance.postprocessor && instance.postprocessor.tiltShift) {
-            instance.postprocessor.tiltShift.uniforms.blurAmount.value = blurAmount;
+            // Scale blur amount with render scale to maintain consistent appearance
+            const scaledBlurAmount = blurAmount * instance.renderScale;
+            instance.postprocessor.tiltShift.uniforms.blurAmount.value = scaledBlurAmount;
+            instance.shouldRender = true;
+        }
+    }
+
+    // Update tilt-shift parameters to compensate for current render scale
+    updateTiltShiftForRenderScale() {
+        const instance = this;
+        
+        if(instance.postprocessor && instance.postprocessor.tiltShift) {
+            const currentBlurAmount = instance.postprocessor.tiltShift.uniforms.blurAmount.value;
+            const baseBlurAmount = currentBlurAmount / (instance.renderScale || 1);
+            instance.postprocessor.tiltShift.uniforms.blurAmount.value = baseBlurAmount * instance.renderScale;
             instance.shouldRender = true;
         }
     }
@@ -2668,7 +2682,10 @@ export class Scroll3dEngine {
         if (instance.postprocessor && instance.postprocessor.tiltShift) {
             instance.postprocessor.tiltShift.uniforms.focusHeight.value = focusHeight;
             instance.postprocessor.tiltShift.uniforms.focusWidth.value = focusWidth;
-            instance.postprocessor.tiltShift.uniforms.blurAmount.value = blurAmount;
+            
+            // Scale blur amount inversely with render scale to maintain consistent blur appearance
+            const scaledBlurAmount = blurAmount * instance.renderScale;
+            instance.postprocessor.tiltShift.uniforms.blurAmount.value = scaledBlurAmount;
             instance.shouldRender = true;
         }
     }
@@ -3656,6 +3673,11 @@ function setInstanceSize(instance) {
 
         if(instance.postprocessor.tiltShift) {
             instance.postprocessor.tiltShift.uniforms.resolution.value.set(renderWidth, renderHeight);
+            
+            // Update blur amount to compensate for render scale changes
+            const currentBlurAmount = instance.postprocessor.tiltShift.uniforms.blurAmount.value;
+            const baseBlurAmount = currentBlurAmount / (instance.renderScale || 1);
+            instance.postprocessor.tiltShift.uniforms.blurAmount.value = baseBlurAmount * instance.renderScale;
         }
     }
 
@@ -6193,7 +6215,10 @@ function initPostProcessor(instance) {
             // Set default tilt-shift parameters
             instance.postprocessor.tiltShift.uniforms.focusHeight.value = 0.5;  // Center focus
             instance.postprocessor.tiltShift.uniforms.focusWidth.value = 0.3;   // Focus area width
-            instance.postprocessor.tiltShift.uniforms.blurAmount.value = 3.0;   // Blur strength
+            
+            // Scale blur amount with render scale to maintain consistent appearance
+            const baseBlurAmount = 3.0;
+            instance.postprocessor.tiltShift.uniforms.blurAmount.value = baseBlurAmount * instance.renderScale;
 
             composer.addPass(instance.postprocessor.tiltShift);
         } else {
