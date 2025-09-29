@@ -2557,6 +2557,10 @@ export class Scroll3dEngine {
     setShadowsEnabled(enabled) {
         const instance = this;
 
+        if(instance.shadows == enabled) {
+            return;
+        }
+
         instance.shadows = enabled;
         instance.renderer.shadowMap.enabled = enabled;
 
