@@ -2508,6 +2508,11 @@ export class Scroll3dEngine {
 
     setRenderScale(scale) {
         const instance = this;
+
+        if(scale == instance.renderScale) {
+            return;
+        }
+
         instance.renderScale = scale;
         setInstanceSize(instance);
     }
