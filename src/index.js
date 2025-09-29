@@ -43,7 +43,7 @@ import {
     LineDashedMaterial,
     LineSegments,
     MathUtils,
-    MeshPhysicalMaterial,
+    Frustum,
     Matrix4,
     Mesh,
     MeshBasicMaterial,
@@ -883,6 +883,9 @@ export class Scroll3dEngine {
         this.waterGeometry = null;
         this.waterPlane = null;
         this.waterPosition = 0.6;
+
+        this.frustum = null;
+        this.frustumMatrix = null;
 
         this.lastNight = true;
 
@@ -3729,6 +3732,8 @@ function initInstance(instance) {
 
     instance.camera = new PerspectiveCamera(45, instance.holder.offsetWidth / instance.holder.offsetHeight, 0.005, 40000);
     
+    instance.frustum = new Frustum();
+
     instance.centerObject = new Object3D();
     instance.centerObject.position.x = instance.centerPosition.x * 2;
     instance.centerObject.position.y = instance.centerPosition.z * 2;
@@ -7572,6 +7577,9 @@ function handleInstanceRender(instance, t) {
         return;
     }
 
+    instance.frustumMatrix = new Matrix4().multiplyMatrices(instance.camera.projectionMatrix, instance.camera.matrixWorldInverse);
+    instance.frustum.setFromProjectionMatrix(instance.frustumMatrix);
+
     if(instance.lastRAF == null) {
         instance.lastRAF = t;
     }
@@ -9499,6 +9507,13 @@ export function setChunkTextureAtlas(atlas) {
 }
 
 function updateObjectLoop(instance, obj, delta) {
+
+    
+
+    if(obj.object && !instance.frustum.intersectsObject(obj.object)) {
+        return
+    }
+
     if(obj.type == "pointlight") {
         if(obj.flickers) {
             const light = obj.object.children[0];
