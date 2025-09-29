@@ -3151,6 +3151,8 @@ class WorldObject {
         this.shadow = options.shadow || false;
         this.flickers = options.flickers || false;
 
+        this.bmAnimationsRef = null;
+
         let defNoHit = false;
 
         if(this.type == "sprite" || this.type == "fakelight") {
@@ -9530,19 +9532,34 @@ function updateObjectLoop(instance, obj, delta) {
 
     if(obj.subType && obj.subType == "bm" && obj.mesh) {
 
-        if(obj.animation) {
-            if(obj.mesh.bmDat.animations[obj.animation]) {
-                obj.mesh.bmDat.animation = obj.animation;
+        let totalAnimations = obj.bmAnimationsRef;
+
+        if(totalAnimations == undefined || totalAnimations == null) {
+            for(let a in obj.mesh.bmDat.animations) {
+                totalAnimations++;
+            }
+
+            obj.bmAnimationsRef = totalAnimations;
+        }
+        
+
+        if(totalAnimations > 0) {
+            if(obj.animation) {
+                if(obj.mesh.bmDat.animations[obj.animation]) {
+                    obj.mesh.bmDat.animation = obj.animation;
+                } else {
+                    obj.mesh.bmDat.animation = null;
+                }
             } else {
                 obj.mesh.bmDat.animation = null;
             }
-        } else {
-            obj.mesh.bmDat.animation = null;
+
+            if(obj.mesh.animate) {
+                obj.mesh.animate(delta);
+            }
         }
 
-        if(obj.mesh.animate) {
-            obj.mesh.animate(delta);
-        }
+        
     }
 }
 
