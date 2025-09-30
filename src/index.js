@@ -111,6 +111,7 @@ const USE_COLORSPACE = SRGBColorSpace;
 const DEF_CAMZ_OFFSET = 1.3;
 const TARGET_FPS = 60;
 const TARGET_DELTA = 1000 / TARGET_FPS;
+const GAMEPAD_POLL_INTERVAL = Math.round(1000 / 30);
 const SUN_INTENSITY = 4.25;
 const π = Math.PI;
 const ONE_POINT_FIVE_π = π * 1.5;
@@ -668,9 +669,8 @@ let globalToyModeEnabled = false;
 
 let chunkCanvases = {};
 
-let currentGPPollInstance = null;
-
 let gphInit = false;
+let windowFocused = true;
 
 let genTexCanvas = document.createElement("canvas");
 let genTexContext = genTexCanvas.getContext("2d");
@@ -679,7 +679,7 @@ const vppLoader = new VPPLoader();
 const bmLoader = new BMLoader();
 
 window.addEventListener("resize", onResize);
-document.addEventListener("visibilitychange", onResize);
+document.addEventListener("visibilitychange", onVisibilityChange);
 
 export function getInstance(holder, options) {
     if(!gphInit) {
@@ -693,6 +693,8 @@ export function getInstance(holder, options) {
         GPH.setManualPolling(true);
 
         gphInit = true;
+
+        setInterval(pollGamepads, GAMEPAD_POLL_INTERVAL);
     }
 
     if(!options) {
@@ -3445,115 +3447,110 @@ function drawSnowBranch(context, branchLength, direction) {
 
 function onPadDown(id, btn) {
 
-    if(currentGPPollInstance) {
-        if(scrollInstances[currentGPPollInstance]) {
-            const instance = scrollInstances[currentGPPollInstance];
+    for(let sid in scrollInstances) {
+        const instance = scrollInstances[sid];
 
-            let button = GPH.standardButtonConversion(btn);
+        let button = GPH.standardButtonConversion(btn);
 
-            if(id && id.toString().indexOf("vr") == 0) {
-                button = GPH.vrPadButtonConversion(btn, id);
-            }
+        if(id && id.toString().indexOf("vr") == 0) {
+            button = GPH.vrPadButtonConversion(btn, id);
+        }
 
-            if(instance.uiGamepadElement) {
+        if(instance.uiGamepadElement) {
 
-                if(button == "b" && instance.padDown) {
-                    instance.padDown(id, button);
-                    return;
-                }
-
-                const handled = GPH.handleUIGamepadSelection(instance.uiGamepadElement, btn);
-
-                if(!handled && instance.padDown) {
-                    instance.padDown(id, button);
-                }
-
+            if(button == "b" && instance.padDown) {
+                instance.padDown(id, button);
                 return;
             }
 
-            instance.lastPadId = id;
+            const handled = GPH.handleUIGamepadSelection(instance.uiGamepadElement, btn);
+
+            if(!handled && instance.padDown) {
+                instance.padDown(id, button);
+            }
+
+            return;
+        }
+
+        instance.lastPadId = id;
             
-            if(instance.padControlMethod == "standard") {
-                if(button == "a" || button == "rt") {
-                    const x = instance.lastWidth / 2;
-                    const y = instance.lastHeight / 2;
+        if(instance.padControlMethod == "standard") {
+            if(button == "a" || button == "rt") {
+                const x = instance.lastWidth / 2;
+                const y = instance.lastHeight / 2;
 
-                    const hitPosition = actualLocationToVirtual(instance, x, y);
+                const hitPosition = actualLocationToVirtual(instance, x, y);
 
-                    if(hitPosition) {
-                        if(instance.clickFunction) {
+                if(hitPosition) {
+                    if(instance.clickFunction) {
     
-                            if(hitPosition.z < 0) {
-                                hitPosition.z = 0;
-                            }
+                        if(hitPosition.z < 0) {
+                            hitPosition.z = 0;
+                        }
     
-                            instance.clickFunction(
-                                buildInteractionResult(instance, {
-                                    down: false
-                                }, hitPosition, x, y, "gamepad")
-                            );
+                        instance.clickFunction(
+                            buildInteractionResult(instance, {
+                                down: false
+                            }, hitPosition, x, y, "gamepad")
+                        );
     
                         
-                        }
                     }
                 }
             }
+        }
             
 
-            if(instance.padDown) {
-                instance.padDown(id, button, btn);
-            }
+        if(instance.padDown) {
+            instance.padDown(id, button, btn);
         }
     }
 }
 
 function onPadUp(id, btn) {
 
-    if(currentGPPollInstance) {
-        if(scrollInstances[currentGPPollInstance]) {
-            const instance = scrollInstances[currentGPPollInstance];
+    for(let sid in scrollInstances) {
+        const instance = scrollInstances[sid];
 
-            if(instance.uiGamepadElement) {
-                return;
-            }
+        if(instance.uiGamepadElement) {
+            return;
+        }
 
-            instance.lastPadId = id;
+        instance.lastPadId = id;
 
-            let button = GPH.standardButtonConversion(btn);
+        let button = GPH.standardButtonConversion(btn);
 
-            if(id && id.toString().indexOf("vr") == 0) {
-                button = GPH.vrPadButtonConversion(btn, id);
-            }
+        if(id && id.toString().indexOf("vr") == 0) {
+            button = GPH.vrPadButtonConversion(btn, id);
+        }
 
 
-            if(instance.padUp) {
-                instance.padUp(id, button, btn);
-            }
+        if(instance.padUp) {
+            instance.padUp(id, button, btn);
         }
     }
 }
 
 function onPadVelocity(id, axis, val) {
 
-    if(currentGPPollInstance) {
-        if(scrollInstances[currentGPPollInstance]) {
-            const instance = scrollInstances[currentGPPollInstance];
+    for(let sid in scrollInstances) {
+        const instance = scrollInstances[sid];
 
-            if(instance.uiGamepadElement) {
-                return;
-            }
+        if(instance.uiGamepadElement) {
+            return;
+        }
 
-            if(instance.padControlMethod == "standard") {
-                instance.axisStates[axis] = val;
-            } 
-            
-            instance.lastPadId = id;
+        if(instance.padControlMethod == "standard") {
+            instance.axisStates[axis] = val;
+        } 
+        
+        instance.lastPadId = id;
 
-            if(instance.padVelocity) {
-                instance.padVelocity(id, axis, val);
-            }
+        if(instance.padVelocity) {
+            instance.padVelocity(id, axis, val);
         }
     }
+
 }
 
 function resetAtlasTexture() {
@@ -7600,9 +7597,6 @@ function handleInstanceRender(instance, t) {
         instance.curDelta = 1;
     }
 
-    currentGPPollInstance = instance.id;
-    GPH.forcePoll();
-
     handleInstanceGamepadScrolling(instance);
 
     if(instance.touchPadMode) {
@@ -7797,6 +7791,8 @@ function handleInstanceRender(instance, t) {
 
 function onDown(e) {
 
+    windowFocused = true;
+
     const instance = scrollInstances[e.element.instanceId];
 
     let x = e.x;
@@ -7842,6 +7838,8 @@ function onDown(e) {
 }
 
 function onMove(e) {
+    windowFocused = true;
+    
     const instance = scrollInstances[e.element.instanceId];
 
     if(!instance) {
@@ -9561,6 +9559,25 @@ function updateObjectLoop(instance, obj, delta) {
 
         
     }
+}
+
+function onVisibilityChange() {
+    if (document.hidden) {
+        windowFocused = false;
+    } else {
+        windowFocused = true;
+    }
+
+    onResize();
+}
+
+function pollGamepads() {
+
+    if(!windowFocused) {
+        return;
+    }
+
+    GPH.forcePoll();
 }
 
 export default {
