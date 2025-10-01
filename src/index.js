@@ -6283,6 +6283,14 @@ function checkHits(hits, ignoreId) {
                 continue;
             }
 
+            if(hit.object.type == "circle") {
+                const dist = distBetweenPoints(hit.point.x / 2, hit.point.y / 2, hit.object.x, hit.object.y);
+
+                if(dist > hit.object.radius) {
+                    continue;
+                }
+            }
+
             if(!chkHoverVec) {
                 chkHoverVec = new Vector3(0,0,0);
             }
