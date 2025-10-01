@@ -684,7 +684,7 @@ document.addEventListener("visibilitychange", onVisibilityChange);
 export function getInstance(holder, options) {
     if(!gphInit) {
         GPH.register({
-            adl: window.adl,
+            adl: options.adl || window.adl || null,
             down: onPadDown,
             up: onPadUp,
             velocity: onPadVelocity
