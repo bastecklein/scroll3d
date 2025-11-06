@@ -1585,6 +1585,12 @@ export class Scroll3dEngine {
 
             mesh.receiveShadow = true;
 
+            if(data.castShadow != undefined) {
+                mesh.castShadow = data.castShadow;
+            } else {
+                mesh.castShadow = true;
+            }
+
             const chunkId = data.x + ":" + data.y + ":" + rOrder;
 
             instance.removeChunk(data.x, data.y, rOrder, 500);
@@ -9270,7 +9276,12 @@ async function doWorkCanvasChunk(instance, data, callback) {
     mesh.position.set(meshX, 0, meshY);
 
     mesh.receiveShadow = true;
-    mesh.castShadow = true;
+
+    if(data.castShadow != undefined) {
+        mesh.castShadow = data.castShadow;
+    } else {
+        mesh.castShadow = true;
+    }
 
     instance.removeChunk(data.x, data.y, rOrder, 500);
 
