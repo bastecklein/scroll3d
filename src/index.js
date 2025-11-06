@@ -2098,6 +2098,11 @@ export class Scroll3dEngine {
         }
 
         instance.grid = new GridHelper(width, segments);
+
+        if(options.z != undefined) {
+            instance.grid.position.y = options.z * 2;
+        }
+
         instance.scene.add(instance.grid);
         instance.hitTestObjects.push(instance.grid);
     }
