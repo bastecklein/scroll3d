@@ -786,7 +786,6 @@ export class Scroll3dEngine {
         this.virtPadRight = true;
 
         this.fineScrolling = false;
-        this.mouseScroll = PIXEL_STEP;
 
         this.sceneScale = 1;
 
@@ -1030,12 +1029,6 @@ export class Scroll3dEngine {
 
     setFineScrolling(val) {
         this.fineScrolling = val;
-
-        if(this.fineScrolling) {
-            this.mouseScroll = FINE_PIXEL_STEP;
-        } else {
-            this.mouseScroll = PIXEL_STEP;
-        }
     }
 
     resize() {
@@ -8089,7 +8082,7 @@ function onUp(e) {
 
 function onMouseWheel(e) {
     const instance = scrollInstances[this.instanceId];
-    const normalized = normalizeWheel(e, this.mouseScroll);
+    const normalized = normalizeWheel(e, instance.mouseScroll);
 
     if(instance.wheelFunction) {
         const handled = instance.wheelFunction(normalized);
@@ -8099,11 +8092,21 @@ function onMouseWheel(e) {
         }
     }
 
-    doZoom(instance,normalized.spinY);
+    if(instance.fineScrolling) {
+        if(normalized.spinY > 0) {
+            doZoom(instance, 1);
+        } else {
+            doZoom(instance, -1);
+        }
+    } else {
+        doZoom(instance, normalized.spinY);
+    }
+
+    
     setCameraPosition(instance);
 }
 
-function normalizeWheel(event, step) {
+function normalizeWheel(event) {
     let sX = 0, sY = 0, pX = 0, pY = 0;
 
     if ("detail"      in event) { sY = event.detail; }
@@ -8116,8 +8119,8 @@ function normalizeWheel(event, step) {
         sY = 0;
     }
 
-    pX = sX * step;
-    pY = sY * step;
+    pX = sX * PIXEL_STEP;
+    pY = sY * PIXEL_STEP;
 
     if ("deltaY" in event) { pY = event.deltaY; }
     if ("deltaX" in event) { pX = event.deltaX; }
