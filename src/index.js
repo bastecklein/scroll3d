@@ -1445,6 +1445,11 @@ export class Scroll3dEngine {
             this.activeCamera = this.camera;
         }
 
+        if(this.vrCamHolder) {
+            this.vrCamHolder.clear();
+            this.vrCamHolder.add(this.activeCamera);
+        }
+
         setCameraPosition(this);
     }
 
