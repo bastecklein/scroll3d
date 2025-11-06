@@ -8094,9 +8094,9 @@ function onMouseWheel(e) {
 
     if(instance.fineScrolling) {
         if(normalized.spinY > 0) {
-            doZoom(instance, 1);
+            doZoom(instance, 0.1);
         } else {
-            doZoom(instance, -1);
+            doZoom(instance, -0.1);
         }
     } else {
         doZoom(instance, normalized.spinY);
