@@ -71,7 +71,8 @@ import {
     Vector2,
     Vector3,
     WebGLRenderer,
-    LinearMipmapLinearFilter
+    LinearMipmapLinearFilter,
+    OrthographicCamera
 } from "three";
 
 import { XRControllerModelFactory } from "three/addons/webxr/XRControllerModelFactory.js";
@@ -870,7 +871,11 @@ export class Scroll3dEngine {
 
         this.contextLost = false;
         this.renderer = null;
+
         this.camera = null;
+        this.orthoCamera = null;
+        this.activeCamera = null;
+
         this.scene = null;
         this.raycaster = null;
         this.mouse = null;
@@ -1429,6 +1434,16 @@ export class Scroll3dEngine {
         this.hitTestObjects.push(this.waterPlane);
     }
 
+    setActiveCamera(cam = "perspective") {
+        if(cam == "ortho") {
+            this.activeCamera = this.orthoCamera;
+        } else {
+            this.activeCamera = this.camera;
+        }
+
+        setCameraPosition(this);
+    }
+
     addChunk(data) {
         const instance = this;
 
@@ -1947,7 +1962,7 @@ export class Scroll3dEngine {
             const tgtOb = instance.objects[instance.cameraTarget];
 
             if(tgtOb) {
-                tgtOb.camGoal.remove(instance.camera);
+                tgtOb.camGoal.remove(instance.activeCamera);
             }
         }
 
@@ -2133,14 +2148,14 @@ export class Scroll3dEngine {
     setFocusMod(mod) {
         this.focusMod = mod;
         updateFOVCamera(this);
-        this.camera.updateMatrix();
+        this.activeCamera.updateMatrix();
         this.shouldRender = true;
     }
 
     setApertureRatio(ratio) {
         this.apertureRatio = ratio;
         updateFOVCamera(this);
-        this.camera.updateMatrix();
+        this.activeCamera.updateMatrix();
         this.shouldRender = true;
     }
 
@@ -2441,7 +2456,7 @@ export class Scroll3dEngine {
 
         if(instance.currentHudCanvas) {
 
-            instance.camera.remove(instance.currentHudCanvasMesh);
+            instance.activeCamera.remove(instance.currentHudCanvasMesh);
 
             instance.currentHudCanvas = null;
             instance.currentHudCanvasTexture = null;
@@ -2470,7 +2485,7 @@ export class Scroll3dEngine {
             setHudCanvasPosition(instance);
             
             instance.currentHudCanvasMesh.layers.set(1);
-            instance.camera.add(instance.currentHudCanvasMesh);
+            instance.activeCamera.add(instance.currentHudCanvasMesh);
             
             instance.currentHudCanvasTexture.needsUpdate = true;
         }
@@ -2638,7 +2653,7 @@ export class Scroll3dEngine {
         if (object && instance.postprocessor && instance.postprocessor.bokeh) {
             // Calculate distance from camera to object
             const objWorldPos = new Vector3(object.x * 2, object.z * 2, object.y * 2);
-            const distance = objWorldPos.distanceTo(instance.camera.position);
+            const distance = objWorldPos.distanceTo(instance.activeCamera.position);
             
             instance.setDOFFocus(distance);
         }
@@ -2867,7 +2882,7 @@ export class Scroll3dEngine {
 
                     instance.shouldRender = true;
                     updateFOVCamera(instance);
-                    instance.camera.updateMatrix();
+                    instance.activeCamera.updateMatrix();
 
                     setCameraPosition(instance);
                     instance.updateHUDCanvas();
@@ -2878,7 +2893,7 @@ export class Scroll3dEngine {
 
                     setTimeout(onResize, 150);
 
-                    instance.camera.updateMatrix();
+                    instance.activeCamera.updateMatrix();
                 });
 
                 zeroOutCameraPosition(instance);
@@ -2887,12 +2902,12 @@ export class Scroll3dEngine {
 
                 instance.shouldRender = true;
                 updateFOVCamera(instance);
-                instance.camera.updateMatrix();
+                instance.activeCamera.updateMatrix();
 
                 setCameraPosition(instance);
                 instance.updateHUDCanvas();
 
-                instance.camera.updateMatrix();
+                instance.activeCamera.updateMatrix();
             });
         } else {
             if(callback) {
@@ -2942,17 +2957,17 @@ export class Scroll3dEngine {
     }
 
     getCamera() {
-        return this.camera;
+        return this.activeCamera;
     }
 
     getCameraPitchAndRotation() {
         const instance = this;
 
-        let usePitch = instance.camera.rotation.x;
-        let useRotation = instance.camera.rotation.y;
+        let usePitch = instance.activeCamera.rotation.x;
+        let useRotation = instance.activeCamera.rotation.y;
 
         if(instance.vrSession) {
-            instance.camera.getWorldDirection(instance.cameraVector);
+            instance.activeCamera.getWorldDirection(instance.cameraVector);
             useRotation = Math.atan2(instance.cameraVector.x,instance.cameraVector.z) + π;
         }
 
@@ -2976,7 +2991,9 @@ export class Scroll3dEngine {
             instance.orientationHolder = holder;
 
             instance.orientationScene = new Scene();
+
             instance.orientationCamera = new PerspectiveCamera( 75, holder.offsetWidth / holder.offsetHeight, 0.05, 1000 );
+
 
             instance.orientationRenderer = new WebGLRenderer({
                 alpha: true
@@ -3110,6 +3127,7 @@ export class Scroll3dEngine {
         instance.renderer = null;
         instance.scene = null;
         instance.camera = null;
+        instance.activeCamera = null;
         instance.centerObject = null;
         instance.vrCamHolder = null;
         instance.canvas = null;
@@ -3667,6 +3685,8 @@ function setInstanceSize(instance) {
     instance.camera.aspect = renderWidth / renderHeight;
     instance.camera.updateProjectionMatrix();
 
+    // ortho camera is updated in updateFOVCamera
+
     instance.shouldRender = true;
 
     if(instance.postprocessor) {
@@ -3735,6 +3755,9 @@ function initInstance(instance) {
     instance.scene = new Scene();
 
     instance.camera = new PerspectiveCamera(45, instance.holder.offsetWidth / instance.holder.offsetHeight, 0.005, 40000);
+    instance.orthoCamera = new OrthographicCamera(-1, 1, 1, -1, 0.005, 40000);
+
+    instance.activeCamera = instance.camera;
     
     instance.centerObject = new Object3D();
     instance.centerObject.position.x = instance.centerPosition.x * 2;
@@ -3760,7 +3783,7 @@ function initInstance(instance) {
         instance.centerPosition.y + 50
     );
         
-    instance.camera.lookAt(
+    instance.activeCamera.lookAt(
         instance.centerPosition.x,
         instance.centerPosition.z,
         instance.centerPosition.y
@@ -5911,7 +5934,7 @@ function setCameraPosition(instance) {
         
         if(instance.vrSession) {
 
-            instance.camera.getWorldDirection(instance.currentVRVector);
+            instance.activeCamera.getWorldDirection(instance.currentVRVector);
             instance.currentVRCamRads = Math.atan2(instance.currentVRVector.x,instance.currentVRVector.z);
 
 
@@ -5976,7 +5999,7 @@ function setCameraPosition(instance) {
     
             instance.vrCamHolder.position.y += instance.poleOffset;
     
-            instance.camera.lookAt(
+            instance.activeCamera.lookAt(
                 (instance.centerPosition.x * 2),
                 (instance.centerPosition.z * 2),
                 (instance.centerPosition.y * 2)
@@ -5984,7 +6007,7 @@ function setCameraPosition(instance) {
         }
     }
 
-    instance.camera.near = camNear;
+    instance.activeCamera.near = camNear;
 
     if(!instance.vrSession) {
         instance.camera.fov = 45;
@@ -6179,7 +6202,7 @@ function clearAutoCircleObjects(instance) {
 
 function actualLocationToVirtual(instance, x, y) {
     instance.mouse.set((x / instance.lastWidth) * 2 - 1, - (y / instance.lastHeight) * 2 + 1);
-    instance.raycaster.setFromCamera(instance.mouse, instance.camera);
+    instance.raycaster.setFromCamera(instance.mouse, instance.activeCamera);
 
     try {
         const hits = instance.raycaster.intersectObjects(instance.hitTestObjects, true);
@@ -6210,7 +6233,7 @@ function initPostProcessor(instance) {
     const composer = new EffectComposer(instance.renderer);
     instance.postprocessor.composer = composer;
 
-    instance.postprocessor.render = new RenderPass(instance.scene, instance.camera);
+    instance.postprocessor.render = new RenderPass(instance.scene, instance.activeCamera);
     composer.addPass(instance.postprocessor.render);
 
     if(instance.useDOFEffect) {
@@ -6237,7 +6260,7 @@ function initPostProcessor(instance) {
                 Math.pow(instance.centerPosition.z * 2, 2)
             ) || instance.radius * 0.7;
 
-            instance.postprocessor.bokeh = new BokehPass(instance.scene, instance.camera, {
+            instance.postprocessor.bokeh = new BokehPass(instance.scene, instance.activeCamera, {
                 focus: focusDistance,
                 aperture: instance.apertureRatio || 0.05,    // Use existing aperture ratio or default
                 maxblur: 0.02,                               // Slightly more blur
@@ -6259,7 +6282,7 @@ function initPostProcessor(instance) {
     
     setInstanceSize(instance);
 
-    instance.camera.updateMatrix();
+    instance.activeCamera.updateMatrix();
     instance.shouldRender = true;
 
     updateFOVCamera(instance);
@@ -6376,6 +6399,22 @@ function updateFOVCamera(instance) {
         instance.postprocessor.bokeh.uniforms.focus.value = instance.radius + instance.focusMod;
         instance.postprocessor.bokeh.uniforms.aperture.value = normalizeAperture(instance.apertureRatio);
     }
+
+    if(instance.activeCamera == instance.orthoCamera) {
+        const width  = instance.lastWidth;
+        const height = instance.lastHeight;
+        const aspect = width / height;
+
+        const halfH = instance.radius / 2;
+        const halfW = halfH * aspect;
+
+        instance.activeCamera.left   = -halfW;
+        instance.activeCamera.right  =  halfW;
+        instance.activeCamera.top    =  halfH;
+        instance.activeCamera.bottom = -halfH;
+        
+        instance.activeCamera.updateProjectionMatrix();
+    }
 }
 
 function getLinearColorSpline(colorFirst, colorSecond) {
@@ -6430,7 +6469,7 @@ function addParticleSystem(instance,imageFile,blending) {
     const systemParams = {
         image: imageFile,
         scene: instance.scene,
-        camera: instance.camera,
+        camera: instance.activeCamera,
         blending: blending
     };
 
@@ -6918,7 +6957,7 @@ function rebuildInstanceRenderer(instance) {
 
     if(instance.vrCamHolder) {
         instance.vrCamHolder.clear();
-        instance.vrCamHolder.add(instance.camera);
+        instance.vrCamHolder.add(instance.activeCamera);
     }
 
     const rendererOptions = {
@@ -7501,7 +7540,7 @@ function getChunkTileNeighbor(data, x, y, z, dep) {
 }
 
 function setVRCameraTheta(instance) {
-    instance.camera.getWorldDirection(instance.cameraVector);
+    instance.activeCamera.getWorldDirection(instance.cameraVector);
 
     const currentPlayerDirRadians = Math.atan2(instance.cameraVector.x,instance.cameraVector.z) + π;
     const thetaRot = currentPlayerDirRadians * ONE_EIGHTY_π_REV;
@@ -7788,7 +7827,7 @@ function handleInstanceRender(instance, t) {
             instance.centerPosition.x = tgtOb.x;
             instance.centerPosition.y = tgtOb.y;
 
-            instance.camera.lookAt(tgtOb.cameraTarget);
+            instance.activeCamera.lookAt(tgtOb.cameraTarget);
         }
     }
 
@@ -8118,13 +8157,13 @@ function stepParticleSystem(system,timeElapsed) {
 function doPostProcessing(instance) {
 
     instance.renderer.clear();
-    instance.camera.layers.set(0);
+    instance.activeCamera.layers.set(0);
 
     let rendered = false;
 
     if(!instance.vrSession) {
         if(instance.effectAnaglyph) {
-            instance.effectAnaglyph.render(instance.scene, instance.camera);
+            instance.effectAnaglyph.render(instance.scene, instance.activeCamera);
             rendered = true;
         }
     
@@ -8140,17 +8179,17 @@ function doPostProcessing(instance) {
     if(rendered) {
         if(instance.currentHudCanvas) {
             instance.renderer.clearDepth();
-            instance.camera.layers.set(1);
-            instance.renderer.render(instance.scene, instance.camera);
+            instance.activeCamera.layers.set(1);
+            instance.renderer.render(instance.scene, instance.activeCamera);
         }
         
     } else {
-        instance.renderer.render(instance.scene, instance.camera);
+        instance.renderer.render(instance.scene, instance.activeCamera);
 
         if(instance.currentHudCanvas) {
             instance.renderer.clearDepth();
-            instance.camera.layers.set(1);
-            instance.renderer.render(instance.scene, instance.camera);
+            instance.activeCamera.layers.set(1);
+            instance.renderer.render(instance.scene, instance.activeCamera);
         }
     }
         
@@ -8164,7 +8203,7 @@ function doPostProcessing(instance) {
         instance.waterPlane.material.uniforms.time.value += globalClock.getDelta();
     }
 
-    instance.camera.layers.set(0);
+    instance.activeCamera.layers.set(0);
 }
 
 function conductPan(instance, x, y) {
