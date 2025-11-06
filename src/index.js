@@ -148,6 +148,7 @@ const DEF_SIZE_OUT_MULTIPLIER = 0.25;
 const DEF_INSTANCE_COUNT = 250000;
 const WORLD_HEIGHT = 128;
 const SNOW_RANGE = 60;
+const FINE_PIXEL_STEP = 1;
 const PIXEL_STEP  = 10;
 const LINE_HEIGHT = 40;
 const PAGE_HEIGHT = 800;
@@ -784,6 +785,9 @@ export class Scroll3dEngine {
         this.virtPadLeft = true;
         this.virtPadRight = true;
 
+        this.fineScrolling = false;
+        this.mouseScroll = PIXEL_STEP;
+
         this.sceneScale = 1;
 
         // VPP instance processing optimization properties
@@ -1022,6 +1026,16 @@ export class Scroll3dEngine {
         this.holderBackground = options.holderBackground || null;
 
         initInstance(this);
+    }
+
+    setFineScrolling(val) {
+        this.fineScrolling = val;
+
+        if(this.fineScrolling) {
+            this.mouseScroll = FINE_PIXEL_STEP;
+        } else {
+            this.mouseScroll = PIXEL_STEP;
+        }
     }
 
     resize() {
@@ -3764,7 +3778,7 @@ function initInstance(instance) {
     instance.scene = new Scene();
 
     instance.camera = new PerspectiveCamera(45, instance.holder.offsetWidth / instance.holder.offsetHeight, 0.005, 40000);
-    instance.orthoCamera = new OrthographicCamera(-1, 1, 1, -1, 0.005, 40000);
+    instance.orthoCamera = new OrthographicCamera(-1, 1, 1, -1, 0.0005, 40000);
 
     instance.activeCamera = instance.camera;
     
@@ -8075,7 +8089,7 @@ function onUp(e) {
 
 function onMouseWheel(e) {
     const instance = scrollInstances[this.instanceId];
-    const normalized = normalizeWheel(e);
+    const normalized = normalizeWheel(e, this.mouseScroll);
 
     if(instance.wheelFunction) {
         const handled = instance.wheelFunction(normalized);
@@ -8089,7 +8103,7 @@ function onMouseWheel(e) {
     setCameraPosition(instance);
 }
 
-function normalizeWheel(event) {
+function normalizeWheel(event, step) {
     let sX = 0, sY = 0, pX = 0, pY = 0;
 
     if ("detail"      in event) { sY = event.detail; }
@@ -8102,8 +8116,8 @@ function normalizeWheel(event) {
         sY = 0;
     }
 
-    pX = sX * PIXEL_STEP;
-    pY = sY * PIXEL_STEP;
+    pX = sX * step;
+    pY = sY * step;
 
     if ("deltaY" in event) { pY = event.deltaY; }
     if ("deltaX" in event) { pX = event.deltaX; }
