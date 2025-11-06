@@ -1434,6 +1434,10 @@ export class Scroll3dEngine {
         this.hitTestObjects.push(this.waterPlane);
     }
 
+    /**
+     * Set the active camera type.
+     * @param {string} cam - The camera type to set ("perspective" or "ortho").
+     */
     setActiveCamera(cam = "perspective") {
         if(cam == "ortho") {
             this.activeCamera = this.orthoCamera;
@@ -6412,7 +6416,7 @@ function updateFOVCamera(instance) {
         instance.activeCamera.right  =  halfW;
         instance.activeCamera.top    =  halfH;
         instance.activeCamera.bottom = -halfH;
-        
+
         instance.activeCamera.updateProjectionMatrix();
     }
 }
