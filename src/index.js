@@ -2161,6 +2161,15 @@ export class Scroll3dEngine {
         this.maxPhi = mp;
     }
 
+    // Set orthographic camera near and far planes for better culling control
+    setOrthoCameraNearFar(near = 0.1, far = 40000) {
+        if (this.orthoCamera) {
+            this.orthoCamera.near = near;
+            this.orthoCamera.far = far;
+            this.orthoCamera.updateProjectionMatrix();
+        }
+    }
+
     setFocusMod(mod) {
         this.focusMod = mod;
         updateFOVCamera(this);
@@ -3771,7 +3780,7 @@ function initInstance(instance) {
     instance.scene = new Scene();
 
     instance.camera = new PerspectiveCamera(45, instance.holder.offsetWidth / instance.holder.offsetHeight, 0.005, 40000);
-    instance.orthoCamera = new OrthographicCamera(-1, 1, 1, -1, 0.0005, 40000);
+    instance.orthoCamera = new OrthographicCamera(-1, 1, 1, -1, 0.1, 40000);
 
     instance.activeCamera = instance.camera;
     
@@ -6421,7 +6430,10 @@ function updateFOVCamera(instance) {
         const height = instance.lastHeight;
         const aspect = width / height;
 
-        const halfH = instance.radius / 2;
+        // Use a more appropriate scale factor for orthographic view
+        // This prevents culling when zoomed in close
+        const scale = Math.max(instance.radius / 4, 1); // Minimum scale of 1 to prevent too small frustum
+        const halfH = scale;
         const halfW = halfH * aspect;
 
         instance.activeCamera.left   = -halfW;
@@ -6702,6 +6714,7 @@ function normalizeSunPosition(instance) {
             }
         }
 
+        instance.directionalLight.shadow.camera.near = 0.1;
         instance.directionalLight.shadow.camera.far = 1600;
 
         let sizeOut = instance.radius;
@@ -6709,9 +6722,12 @@ function normalizeSunPosition(instance) {
         if(instance.toyModeEnabled) {
             sizeOut = Math.round(instance.radius * 1.5);
         } else {
-            sizeOut = Math.round(instance.radius * 0.75);
+            // Increased from 0.75 to 1.2 to prevent shadow culling when zoomed in
+            sizeOut = Math.round(instance.radius * 1.2);
         }
 
+        // Ensure minimum shadow camera size to prevent culling at high zoom levels
+        sizeOut = Math.max(sizeOut, 50);
 
         instance.directionalLight.shadow.camera.left = -sizeOut;
         instance.directionalLight.shadow.camera.right = sizeOut * instance.sizeOutMultiplier;
