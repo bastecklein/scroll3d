@@ -588,7 +588,7 @@ const EnhancedWaterShader = {
         'waterTexture': { value: null },
         'hasTexture': { value: 0.0 },
         'textureScale': { value: 8.0 },
-        'cameraPosition': { value: new Vector3() }
+        'cameraPosCustom': { value: new Vector3() }
     },
     vertexShader: `
         precision highp float;
@@ -658,7 +658,7 @@ const EnhancedWaterShader = {
         uniform sampler2D waterTexture;
         uniform float hasTexture;
         uniform float textureScale;
-        uniform vec3 cameraPosition;
+        uniform vec3 cameraPosCustom;
         
         varying vec2 vUv;
         varying vec3 vWorldPosition;
@@ -678,7 +678,7 @@ const EnhancedWaterShader = {
             vec2 animUV2 = vUv * textureScale * 1.2 - time * waveSpeed * 0.02;
             
             vec3 normal = normalize(vWorldNormal);
-            vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+            vec3 viewDir = normalize(cameraPosCustom - vWorldPosition);
             
             // Enhanced wave patterns using simplified noise
             float noise1 = noise(animUV1 * 2.0) * 0.5 + 0.5;
@@ -2736,7 +2736,7 @@ export class Scroll3dEngine {
                 waterTexture: { value: waterTexture },
                 hasTexture: { value: hasTexture ? 1.0 : 0.0 },
                 textureScale: { value: config.textureScale },
-                cameraPosition: { value: new Vector3() }
+                cameraPosCustom: { value: new Vector3() }
             },
             vertexShader: EnhancedWaterShader.vertexShader,
             fragmentShader: EnhancedWaterShader.fragmentShader,
@@ -8091,8 +8091,8 @@ function handleInstanceRender(instance, t) {
         uniforms.time.value = timeSeconds;
         
         // Update camera position for enhanced effects (fresnel, etc.)
-        if(uniforms.cameraPosition && instance.activeCamera) {
-            uniforms.cameraPosition.value.copy(instance.activeCamera.position);
+        if(uniforms.cameraPosCustom && instance.activeCamera) {
+            uniforms.cameraPosCustom.value.copy(instance.activeCamera.position);
         }
     }
 
