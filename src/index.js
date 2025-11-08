@@ -571,6 +571,88 @@ const PARTICLE_FRAGMENT_SHADER = `
       gl_FragColor = texture2D(diffuseTexture, coords) * vColour;
     }`;
 
+// Stylized Water Shader - Link's Awakening/Civ 6 style
+const StyleWaterShader = {
+    uniforms: {
+        'time': { value: 0.0 },
+        'deepColor': { value: new Color(0.0, 0.2, 0.5) },
+        'shallowColor': { value: new Color(0.3, 0.8, 1.0) },
+        'foamColor': { value: new Color(0.9, 0.95, 1.0) },
+        'waveSpeed': { value: 0.5 },
+        'waveScale': { value: 2.0 },
+        'foamThreshold': { value: 0.7 },
+        'opacity': { value: 0.85 },
+        'depthFade': { value: 3.0 }
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vWorldPosition;
+        varying float vDepth;
+        
+        void main() {
+            vUv = uv;
+            
+            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+            vWorldPosition = worldPosition.xyz;
+            
+            // Simple depth calculation for edge effects
+            vDepth = worldPosition.y;
+            
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform float time;
+        uniform vec3 deepColor;
+        uniform vec3 shallowColor;
+        uniform vec3 foamColor;
+        uniform float waveSpeed;
+        uniform float waveScale;
+        uniform float foamThreshold;
+        uniform float opacity;
+        uniform float depthFade;
+        
+        varying vec2 vUv;
+        varying vec3 vWorldPosition;
+        varying float vDepth;
+        
+        // Simple noise function for wave patterns
+        float noise(vec2 p) {
+            return sin(p.x * 10.0) * sin(p.y * 10.0) * 0.1 + 
+                   sin(p.x * 20.0) * sin(p.y * 20.0) * 0.05;
+        }
+        
+        void main() {
+            vec2 animUV = vUv + time * waveSpeed * 0.1;
+            
+            // Create animated wave patterns
+            float wave1 = sin(animUV.x * waveScale + time * waveSpeed) * 0.5 + 0.5;
+            float wave2 = sin(animUV.y * waveScale * 1.3 - time * waveSpeed * 0.8) * 0.5 + 0.5;
+            float wave3 = sin((animUV.x + animUV.y) * waveScale * 0.7 + time * waveSpeed * 1.2) * 0.5 + 0.5;
+            
+            // Add some noise for texture
+            float noiseValue = noise(animUV * 5.0 + time * 0.3);
+            
+            // Combine waves
+            float wavePattern = (wave1 + wave2 + wave3) / 3.0 + noiseValue;
+            
+            // Create depth-based color mixing
+            float depthFactor = clamp(abs(vDepth) / depthFade, 0.0, 1.0);
+            vec3 baseColor = mix(shallowColor, deepColor, depthFactor);
+            
+            // Add foam effects
+            float foam = smoothstep(foamThreshold, 1.0, wavePattern);
+            vec3 finalColor = mix(baseColor, foamColor, foam * 0.6);
+            
+            // Edge fade for shallow areas
+            float edgeFade = smoothstep(0.0, 0.3, depthFactor);
+            float finalOpacity = opacity * edgeFade;
+            
+            gl_FragColor = vec4(finalColor, finalOpacity);
+        }
+    `
+};
+
 // Tilt-shift shader for Link's Awakening style effect
 const TiltShiftShader = {
     uniforms: {
@@ -1416,7 +1498,6 @@ export class Scroll3dEngine {
         this.waterPlane.rotation.x = - π * 0.5;
 
         // Ensure offscreen pass clears and isn't affected by XR/composer state
-        // Also handle orthographic camera compatibility
         try {
             const originalBeforeRender = this.waterPlane.onBeforeRender;
             this.waterPlane.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
@@ -1427,21 +1508,8 @@ export class Scroll3dEngine {
                 if (wasXrEnabled) {
                     renderer.xr.enabled = false;
                 }
-                
-                // Handle orthographic camera: use perspective camera for refractor rendering
-                let renderCamera = camera;
-                if (camera.isOrthographicCamera) {
-                    // Use the perspective camera for water reflections
-                    renderCamera = this.camera;
-                    // Sync position and rotation from orthographic to perspective camera
-                    renderCamera.position.copy(camera.position);
-                    renderCamera.rotation.copy(camera.rotation);
-                    renderCamera.updateMatrix();
-                    renderCamera.updateMatrixWorld();
-                }
-                
                 try {
-                    originalBeforeRender.call(this.waterPlane, renderer, scene, renderCamera, geometry, material, group);
+                    originalBeforeRender.call(this.waterPlane, renderer, scene, camera, geometry, material, group);
                 } finally {
                     if (wasXrEnabled) {
                         renderer.xr.enabled = true;
@@ -1472,9 +1540,6 @@ export class Scroll3dEngine {
         }
 
         setCameraPosition(this);
-        
-        // Sync cameras for water reflections when switching camera types
-        this.syncCamerasForWater();
     }
 
     addChunk(data) {
@@ -2203,17 +2268,6 @@ export class Scroll3dEngine {
         }
     }
 
-    // Sync perspective camera with orthographic camera for water reflections
-    syncCamerasForWater() {
-        if (this.activeCamera === this.orthoCamera && this.camera && this.waterPlane) {
-            // Copy position and rotation from orthographic to perspective camera
-            this.camera.position.copy(this.orthoCamera.position);
-            this.camera.rotation.copy(this.orthoCamera.rotation);
-            this.camera.updateMatrix();
-            this.camera.updateMatrixWorld();
-        }
-    }
-
     setFocusMod(mod) {
         this.focusMod = mod;
         updateFOVCamera(this);
@@ -2518,6 +2572,126 @@ export class Scroll3dEngine {
             instance.waterTexture = null;
             instance.waterPlane = null;
         }
+    }
+
+    /**
+     * Set stylized water that works with both orthographic and perspective cameras
+     * @param {Object} options - Water configuration options
+     */
+    setSimpleWater(options) {
+        const instance = this;
+
+        // Remove existing water first
+        if(instance.waterPlane) {
+            removeFromArray(instance.hitTestObjects, instance.waterPlane);
+            instance.scene.remove(instance.waterPlane);
+            instance.waterPlane.geometry.dispose();
+            instance.waterPlane.material.dispose();
+            instance.waterPlane = null;
+        }
+
+        if(!options) {
+            return;
+        }
+
+        // Default options
+        const config = {
+            deepColor: options.deepColor || "#0066AA",
+            shallowColor: options.shallowColor || "#4DD0E1", 
+            foamColor: options.foamColor || "#FFFFFF",
+            waveSpeed: options.waveSpeed || 1.0,
+            waveScale: options.waveScale || 2.0,
+            opacity: options.opacity || 0.85,
+            size: options.size || 64,
+            position: options.position || { x: 0, y: 0, z: 0.6 }
+        };
+
+        instance.waterPosition = config.position.z;
+
+        // Create water geometry
+        if(!instance.waterGeometry) {
+            instance.waterGeometry = new PlaneGeometry(config.size, config.size, 32, 32);
+        }
+
+        // Create shader material
+        const waterMaterial = new ShaderMaterial({
+            uniforms: {
+                time: { value: 0.0 },
+                deepColor: { value: new Color(config.deepColor) },
+                shallowColor: { value: new Color(config.shallowColor) },
+                foamColor: { value: new Color(config.foamColor) },
+                waveSpeed: { value: config.waveSpeed },
+                waveScale: { value: config.waveScale },
+                foamThreshold: { value: 0.7 },
+                opacity: { value: config.opacity },
+                depthFade: { value: 3.0 }
+            },
+            vertexShader: StyleWaterShader.vertexShader,
+            fragmentShader: StyleWaterShader.fragmentShader,
+            transparent: true,
+            side: DoubleSide,
+            depthWrite: false
+        });
+
+        // Create water mesh
+        instance.waterPlane = new Mesh(instance.waterGeometry, waterMaterial);
+        
+        // Position the water
+        instance.waterPlane.position.set(
+            (config.position.x || instance.centerPosition.x) * 2, 
+            config.position.z * 2, 
+            (config.position.y || instance.centerPosition.y) * 2
+        );
+        instance.waterPlane.rotation.x = -π * 0.5;
+
+        // Store reference for animation
+        instance.waterPlane.isSimpleWater = true;
+        instance.waterPlane.material.userData = { startTime: performance.now() };
+
+        instance.scene.add(instance.waterPlane);
+        instance.hitTestObjects.push(instance.waterPlane);
+        
+        instance.shouldRender = true;
+    }
+
+    /**
+     * Update simple water properties without recreating it
+     * @param {Object} options - Water property updates
+     */
+    updateSimpleWater(options) {
+        const instance = this;
+        
+        if(!instance.waterPlane || !instance.waterPlane.isSimpleWater) {
+            return;
+        }
+
+        const uniforms = instance.waterPlane.material.uniforms;
+
+        if(options.deepColor) {
+            uniforms.deepColor.value.set(options.deepColor);
+        }
+        
+        if(options.shallowColor) {
+            uniforms.shallowColor.value.set(options.shallowColor);
+        }
+        
+        if(options.foamColor) {
+            uniforms.foamColor.value.set(options.foamColor);
+        }
+        
+        if(options.waveSpeed !== undefined) {
+            uniforms.waveSpeed.value = options.waveSpeed;
+        }
+        
+        if(options.waveScale !== undefined) {
+            uniforms.waveScale.value = options.waveScale;
+        }
+        
+        if(options.opacity !== undefined) {
+            uniforms.opacity.value = options.opacity;
+        }
+
+        instance.shouldRender = true;
     }
 
     setHUDCanvas(canvas) {
@@ -6486,9 +6660,6 @@ function updateFOVCamera(instance) {
         instance.activeCamera.bottom = -halfH;
 
         instance.activeCamera.updateProjectionMatrix();
-        
-        // Sync perspective camera for water reflections when using orthographic
-        instance.syncCamerasForWater();
     }
 }
 
@@ -7759,6 +7930,12 @@ function handleInstanceRender(instance, t) {
 
         processSpecialParticleSystem(system,elapsed,instance);
         stepParticleSystem(system,elapsed);
+    }
+
+    // Update simple water animation
+    if(instance.waterPlane && instance.waterPlane.isSimpleWater) {
+        const timeSeconds = performance.now() * 0.001;
+        instance.waterPlane.material.uniforms.time.value = timeSeconds;
     }
 
     for(let obid in instance.objects) {
