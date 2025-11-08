@@ -2103,6 +2103,11 @@ export class Scroll3dEngine {
             instance.grid.position.y = options.z * 2;
         }
 
+        if(options.opacity != undefined) {
+            instance.grid.material.opacity = options.opacity;
+            instance.grid.material.transparent = true;
+        }
+
         instance.scene.add(instance.grid);
         instance.hitTestObjects.push(instance.grid);
     }
