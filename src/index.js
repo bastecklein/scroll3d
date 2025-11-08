@@ -1416,6 +1416,7 @@ export class Scroll3dEngine {
         this.waterPlane.rotation.x = - π * 0.5;
 
         // Ensure offscreen pass clears and isn't affected by XR/composer state
+        // Also handle orthographic camera compatibility
         try {
             const originalBeforeRender = this.waterPlane.onBeforeRender;
             this.waterPlane.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
@@ -1426,8 +1427,21 @@ export class Scroll3dEngine {
                 if (wasXrEnabled) {
                     renderer.xr.enabled = false;
                 }
+                
+                // Handle orthographic camera: use perspective camera for refractor rendering
+                let renderCamera = camera;
+                if (camera.isOrthographicCamera) {
+                    // Use the perspective camera for water reflections
+                    renderCamera = this.camera;
+                    // Sync position and rotation from orthographic to perspective camera
+                    renderCamera.position.copy(camera.position);
+                    renderCamera.rotation.copy(camera.rotation);
+                    renderCamera.updateMatrix();
+                    renderCamera.updateMatrixWorld();
+                }
+                
                 try {
-                    originalBeforeRender.call(this.waterPlane, renderer, scene, camera, geometry, material, group);
+                    originalBeforeRender.call(this.waterPlane, renderer, scene, renderCamera, geometry, material, group);
                 } finally {
                     if (wasXrEnabled) {
                         renderer.xr.enabled = true;
@@ -1458,6 +1472,9 @@ export class Scroll3dEngine {
         }
 
         setCameraPosition(this);
+        
+        // Sync cameras for water reflections when switching camera types
+        this.syncCamerasForWater();
     }
 
     addChunk(data) {
@@ -2183,6 +2200,17 @@ export class Scroll3dEngine {
             this.orthoCamera.near = near;
             this.orthoCamera.far = far;
             this.orthoCamera.updateProjectionMatrix();
+        }
+    }
+
+    // Sync perspective camera with orthographic camera for water reflections
+    syncCamerasForWater() {
+        if (this.activeCamera === this.orthoCamera && this.camera && this.waterPlane) {
+            // Copy position and rotation from orthographic to perspective camera
+            this.camera.position.copy(this.orthoCamera.position);
+            this.camera.rotation.copy(this.orthoCamera.rotation);
+            this.camera.updateMatrix();
+            this.camera.updateMatrixWorld();
         }
     }
 
@@ -6458,6 +6486,9 @@ function updateFOVCamera(instance) {
         instance.activeCamera.bottom = -halfH;
 
         instance.activeCamera.updateProjectionMatrix();
+        
+        // Sync perspective camera for water reflections when using orthographic
+        instance.syncCamerasForWater();
     }
 }
 
