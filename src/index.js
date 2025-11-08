@@ -6444,6 +6444,7 @@ function setCameraPosition(instance) {
 
     updateFOVCamera(instance);
     normalizeSunPosition(instance);
+    normalizeWaterPosition(instance);
 
     instance.shouldRender = true;
 }
@@ -7199,7 +7200,11 @@ function normalizeSunPosition(instance) {
 
     }
 
-    if(instance.waterPlane) {
+    
+}
+
+function normalizeWaterPosition(instance) {
+    if(instance && instance.waterPlane) {
         instance.waterPlane.position.set(instance.centerPosition.x * 2, instance.waterPosition * 2, instance.centerPosition.y * 2);
     }
 }
