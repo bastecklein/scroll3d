@@ -571,8 +571,8 @@ const PARTICLE_FRAGMENT_SHADER = `
       gl_FragColor = texture2D(diffuseTexture, coords) * vColour;
     }`;
 
-// Stylized Water Shader - Link's Awakening/Civ 6 style
-const StyleWaterShader = {
+// Enhanced Water Shader - Realistic with optional texture support
+const EnhancedWaterShader = {
     uniforms: {
         'time': { value: 0.0 },
         'deepColor': { value: new Color(0.0, 0.2, 0.5) },
@@ -580,25 +580,62 @@ const StyleWaterShader = {
         'foamColor': { value: new Color(0.9, 0.95, 1.0) },
         'waveSpeed': { value: 0.5 },
         'waveScale': { value: 2.0 },
-        'foamThreshold': { value: 0.7 },
+        'normalScale': { value: 1.0 },
         'opacity': { value: 0.85 },
-        'depthFade': { value: 3.0 }
+        'depthFade': { value: 3.0 },
+        'reflectionStrength': { value: 0.6 },
+        'refractionStrength': { value: 0.3 },
+        'waterTexture': { value: null },
+        'hasTexture': { value: 0.0 },
+        'textureScale': { value: 8.0 },
+        'cameraPosition': { value: new Vector3() }
     },
     vertexShader: `
+        uniform float time;
+        uniform float waveScale;
+        uniform float waveSpeed;
         varying vec2 vUv;
         varying vec3 vWorldPosition;
+        varying vec3 vWorldNormal;
+        varying vec3 vViewPosition;
         varying float vDepth;
+        
+        // Improved wave displacement
+        float wave(vec2 pos, float amplitude, float frequency, float phase) {
+            return amplitude * sin(dot(pos, vec2(cos(phase), sin(phase))) * frequency + time * waveSpeed);
+        }
         
         void main() {
             vUv = uv;
             
-            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-            vWorldPosition = worldPosition.xyz;
+            // Calculate wave displacement
+            vec3 pos = position;
+            float displacement = 0.0;
             
-            // Simple depth calculation for edge effects
+            // Multiple wave layers for realistic water movement
+            displacement += wave(pos.xz, 0.15, waveScale * 0.8, 0.0);
+            displacement += wave(pos.xz, 0.1, waveScale * 1.3, 1.2);
+            displacement += wave(pos.xz, 0.05, waveScale * 2.1, 2.4);
+            
+            pos.y += displacement;
+            
+            vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
+            vWorldPosition = worldPosition.xyz;
             vDepth = worldPosition.y;
             
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+            vViewPosition = -mvPosition.xyz;
+            gl_Position = projectionMatrix * mvPosition;
+            
+            // Calculate normal for lighting (approximate)
+            float offset = 0.1;
+            float left = wave((pos.xz - vec2(offset, 0.0)), 0.15, waveScale * 0.8, 0.0);
+            float right = wave((pos.xz + vec2(offset, 0.0)), 0.15, waveScale * 0.8, 0.0);
+            float front = wave((pos.xz - vec2(0.0, offset)), 0.15, waveScale * 0.8, 0.0);
+            float back = wave((pos.xz + vec2(0.0, offset)), 0.15, waveScale * 0.8, 0.0);
+            
+            vec3 normal = normalize(vec3(left - right, 2.0 * offset, front - back));
+            vWorldNormal = normalMatrix * normal;
         }
     `,
     fragmentShader: `
@@ -608,45 +645,136 @@ const StyleWaterShader = {
         uniform vec3 foamColor;
         uniform float waveSpeed;
         uniform float waveScale;
-        uniform float foamThreshold;
+        uniform float normalScale;
         uniform float opacity;
         uniform float depthFade;
+        uniform float reflectionStrength;
+        uniform float refractionStrength;
+        uniform sampler2D waterTexture;
+        uniform float hasTexture;
+        uniform float textureScale;
+        uniform vec3 cameraPosition;
         
         varying vec2 vUv;
         varying vec3 vWorldPosition;
+        varying vec3 vWorldNormal;
+        varying vec3 vViewPosition;
         varying float vDepth;
         
-        // Simple noise function for wave patterns
-        float noise(vec2 p) {
-            return sin(p.x * 10.0) * sin(p.y * 10.0) * 0.1 + 
-                   sin(p.x * 20.0) * sin(p.y * 20.0) * 0.05;
+        // Enhanced noise functions
+        vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+        vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+        
+        float snoise(vec3 v) {
+            const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+            const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+            
+            vec3 i = floor(v + dot(v, C.yyy));
+            vec3 x0 = v - i + dot(i, C.xxx);
+            
+            vec3 g = step(x0.yzx, x0.xyz);
+            vec3 l = 1.0 - g;
+            vec3 i1 = min(g.xyz, l.zxy);
+            vec3 i2 = max(g.xyz, l.zxy);
+            
+            vec3 x1 = x0 - i1 + C.xxx;
+            vec3 x2 = x0 - i2 + C.yyy;
+            vec3 x3 = x0 - D.yyy;
+            
+            i = mod289(i);
+            vec4 p = permute(permute(permute(
+                        i.z + vec4(0.0, i1.z, i2.z, 1.0))
+                        + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+                        + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+            
+            float n_ = 0.142857142857;
+            vec3 ns = n_ * D.wyz - D.xzx;
+            
+            vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+            
+            vec4 x_ = floor(j * ns.z);
+            vec4 y_ = floor(j - 7.0 * x_);
+            
+            vec4 x = x_ *ns.x + ns.yyyy;
+            vec4 y = y_ *ns.x + ns.yyyy;
+            vec4 h = 1.0 - abs(x) - abs(y);
+            
+            vec4 b0 = vec4(x.xy, y.xy);
+            vec4 b1 = vec4(x.zw, y.zw);
+            
+            vec4 s0 = floor(b0)*2.0 + 1.0;
+            vec4 s1 = floor(b1)*2.0 + 1.0;
+            vec4 sh = -step(h, vec4(0.0));
+            
+            vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+            vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+            
+            vec3 p0 = vec3(a0.xy, h.x);
+            vec3 p1 = vec3(a0.zw, h.y);
+            vec3 p2 = vec3(a1.xy, h.z);
+            vec3 p3 = vec3(a1.zw, h.w);
+            
+            vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+            p0 *= norm.x;
+            p1 *= norm.y;
+            p2 *= norm.z;
+            p3 *= norm.w;
+            
+            vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+            m = m * m;
+            return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
         }
         
         void main() {
-            vec2 animUV = vUv + time * waveSpeed * 0.1;
+            vec2 animUV1 = vUv * textureScale + time * waveSpeed * 0.03;
+            vec2 animUV2 = vUv * textureScale * 1.2 - time * waveSpeed * 0.02;
             
-            // Create animated wave patterns
-            float wave1 = sin(animUV.x * waveScale + time * waveSpeed) * 0.5 + 0.5;
-            float wave2 = sin(animUV.y * waveScale * 1.3 - time * waveSpeed * 0.8) * 0.5 + 0.5;
-            float wave3 = sin((animUV.x + animUV.y) * waveScale * 0.7 + time * waveSpeed * 1.2) * 0.5 + 0.5;
+            vec3 normal = normalize(vWorldNormal);
+            vec3 viewDir = normalize(cameraPosition - vWorldPosition);
             
-            // Add some noise for texture
-            float noiseValue = noise(animUV * 5.0 + time * 0.3);
+            // Enhanced wave patterns using noise
+            float noise1 = snoise(vec3(animUV1 * 2.0, time * 0.5)) * 0.5 + 0.5;
+            float noise2 = snoise(vec3(animUV2 * 3.0, time * 0.3)) * 0.5 + 0.5;
+            float wavePattern = (noise1 + noise2) * 0.5;
             
-            // Combine waves
-            float wavePattern = (wave1 + wave2 + wave3) / 3.0 + noiseValue;
+            vec3 baseColor = deepColor;
             
-            // Create depth-based color mixing
-            float depthFactor = clamp(abs(vDepth) / depthFade, 0.0, 1.0);
-            vec3 baseColor = mix(shallowColor, deepColor, depthFactor);
+            // Use texture if provided
+            if (hasTexture > 0.5) {
+                vec2 distortedUV1 = animUV1 + normal.xz * 0.02;
+                vec2 distortedUV2 = animUV2 + normal.xz * 0.015;
+                
+                vec3 texture1 = texture2D(waterTexture, distortedUV1).rgb;
+                vec3 texture2 = texture2D(waterTexture, distortedUV2).rgb;
+                
+                // Blend textures for more dynamic look
+                vec3 blendedTexture = mix(texture1, texture2, 0.5);
+                baseColor = mix(deepColor, shallowColor, blendedTexture.r);
+                
+                // Use texture for additional wave detail
+                wavePattern += (blendedTexture.g - 0.5) * 0.3;
+            } else {
+                // Procedural color mixing when no texture
+                float depthFactor = clamp(abs(vDepth) / depthFade, 0.0, 1.0);
+                baseColor = mix(shallowColor, deepColor, depthFactor);
+            }
             
-            // Add foam effects
-            float foam = smoothstep(foamThreshold, 1.0, wavePattern);
-            vec3 finalColor = mix(baseColor, foamColor, foam * 0.6);
+            // Fresnel effect for realistic reflection/refraction
+            float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 2.0);
             
-            // Edge fade for shallow areas
-            float edgeFade = smoothstep(0.0, 0.3, depthFactor);
-            float finalOpacity = opacity * edgeFade;
+            // Foam effects on wave peaks
+            float foam = smoothstep(0.7, 1.0, wavePattern) * smoothstep(0.0, 0.2, fresnel);
+            vec3 finalColor = mix(baseColor, foamColor, foam * 0.8);
+            
+            // Add subtle reflection tint
+            finalColor += vec3(0.1, 0.2, 0.3) * fresnel * reflectionStrength;
+            
+            // Dynamic opacity based on view angle and depth
+            float viewOpacity = mix(0.7, 1.0, fresnel);
+            float depthOpacity = smoothstep(0.0, 2.0, abs(vDepth));
+            float finalOpacity = opacity * viewOpacity * depthOpacity;
             
             gl_FragColor = vec4(finalColor, finalOpacity);
         }
@@ -2575,7 +2703,8 @@ export class Scroll3dEngine {
     }
 
     /**
-     * Set stylized water that works with both orthographic and perspective cameras
+     * Set enhanced water that works with both orthographic and perspective cameras
+     * Supports optional textures for realistic effects or stylized look without
      * @param {Object} options - Water configuration options
      */
     setSimpleWater(options) {
@@ -2601,19 +2730,50 @@ export class Scroll3dEngine {
             foamColor: options.foamColor || "#FFFFFF",
             waveSpeed: options.waveSpeed || 1.0,
             waveScale: options.waveScale || 2.0,
+            normalScale: options.normalScale || 1.0,
             opacity: options.opacity || 0.85,
+            reflectionStrength: options.reflectionStrength || 0.6,
+            refractionStrength: options.refractionStrength || 0.3,
+            textureScale: options.textureScale || 8.0,
             size: options.size || 64,
-            position: options.position || { x: 0, y: 0, z: 0.6 }
+            segments: options.segments || 64,
+            position: options.position || { x: 0, y: 0, z: 0.6 },
+            texture: options.texture || null  // Optional texture URL or existing texture
         };
 
         instance.waterPosition = config.position.z;
 
-        // Create water geometry
-        if(!instance.waterGeometry) {
-            instance.waterGeometry = new PlaneGeometry(config.size, config.size, 32, 32);
+        // Create enhanced water geometry with more segments for better waves
+        if(!instance.waterGeometry || instance.waterGeometry.parameters.widthSegments < config.segments) {
+            if(instance.waterGeometry) {
+                instance.waterGeometry.dispose();
+            }
+            instance.waterGeometry = new PlaneGeometry(config.size, config.size, config.segments, config.segments);
         }
 
-        // Create shader material
+        // Handle texture loading
+        let waterTexture = null;
+        let hasTexture = false;
+
+        if(config.texture) {
+            if(typeof config.texture === 'string') {
+                // Load texture from URL
+                waterTexture = TEXTURE_LOADER.load(config.texture);
+                waterTexture.wrapS = waterTexture.wrapT = RepeatWrapping;
+                waterTexture.colorSpace = USE_COLORSPACE;
+                hasTexture = true;
+            } else if(config.texture.isTexture) {
+                // Use existing texture
+                waterTexture = config.texture;
+                hasTexture = true;
+            }
+        } else if(instance.waterTexture) {
+            // Use the existing water texture if available
+            waterTexture = instance.waterTexture;
+            hasTexture = true;
+        }
+
+        // Create enhanced shader material
         const waterMaterial = new ShaderMaterial({
             uniforms: {
                 time: { value: 0.0 },
@@ -2622,12 +2782,18 @@ export class Scroll3dEngine {
                 foamColor: { value: new Color(config.foamColor) },
                 waveSpeed: { value: config.waveSpeed },
                 waveScale: { value: config.waveScale },
-                foamThreshold: { value: 0.7 },
+                normalScale: { value: config.normalScale },
                 opacity: { value: config.opacity },
-                depthFade: { value: 3.0 }
+                depthFade: { value: 3.0 },
+                reflectionStrength: { value: config.reflectionStrength },
+                refractionStrength: { value: config.refractionStrength },
+                waterTexture: { value: waterTexture },
+                hasTexture: { value: hasTexture ? 1.0 : 0.0 },
+                textureScale: { value: config.textureScale },
+                cameraPosition: { value: new Vector3() }
             },
-            vertexShader: StyleWaterShader.vertexShader,
-            fragmentShader: StyleWaterShader.fragmentShader,
+            vertexShader: EnhancedWaterShader.vertexShader,
+            fragmentShader: EnhancedWaterShader.fragmentShader,
             transparent: true,
             side: DoubleSide,
             depthWrite: false
@@ -2646,6 +2812,7 @@ export class Scroll3dEngine {
 
         // Store reference for animation
         instance.waterPlane.isSimpleWater = true;
+        instance.waterPlane.isEnhancedWater = true;
         instance.waterPlane.material.userData = { startTime: performance.now() };
 
         instance.scene.add(instance.waterPlane);
@@ -2655,7 +2822,7 @@ export class Scroll3dEngine {
     }
 
     /**
-     * Update simple water properties without recreating it
+     * Update enhanced water properties without recreating it
      * @param {Object} options - Water property updates
      */
     updateSimpleWater(options) {
@@ -2687,8 +2854,46 @@ export class Scroll3dEngine {
             uniforms.waveScale.value = options.waveScale;
         }
         
+        if(options.normalScale !== undefined) {
+            uniforms.normalScale.value = options.normalScale;
+        }
+        
         if(options.opacity !== undefined) {
             uniforms.opacity.value = options.opacity;
+        }
+        
+        if(options.reflectionStrength !== undefined) {
+            uniforms.reflectionStrength.value = options.reflectionStrength;
+        }
+        
+        if(options.refractionStrength !== undefined) {
+            uniforms.refractionStrength.value = options.refractionStrength;
+        }
+        
+        if(options.textureScale !== undefined) {
+            uniforms.textureScale.value = options.textureScale;
+        }
+
+        // Handle texture updates
+        if(options.texture !== undefined) {
+            if(options.texture) {
+                if(typeof options.texture === 'string') {
+                    // Load new texture from URL
+                    const newTexture = TEXTURE_LOADER.load(options.texture);
+                    newTexture.wrapS = newTexture.wrapT = RepeatWrapping;
+                    newTexture.colorSpace = USE_COLORSPACE;
+                    uniforms.waterTexture.value = newTexture;
+                    uniforms.hasTexture.value = 1.0;
+                } else if(options.texture.isTexture) {
+                    // Use existing texture
+                    uniforms.waterTexture.value = options.texture;
+                    uniforms.hasTexture.value = 1.0;
+                }
+            } else {
+                // Remove texture
+                uniforms.waterTexture.value = null;
+                uniforms.hasTexture.value = 0.0;
+            }
         }
 
         instance.shouldRender = true;
@@ -7932,10 +8137,17 @@ function handleInstanceRender(instance, t) {
         stepParticleSystem(system,elapsed);
     }
 
-    // Update simple water animation
+    // Update enhanced water animation
     if(instance.waterPlane && instance.waterPlane.isSimpleWater) {
         const timeSeconds = performance.now() * 0.001;
-        instance.waterPlane.material.uniforms.time.value = timeSeconds;
+        const uniforms = instance.waterPlane.material.uniforms;
+        
+        uniforms.time.value = timeSeconds;
+        
+        // Update camera position for enhanced effects (fresnel, etc.)
+        if(uniforms.cameraPosition && instance.activeCamera) {
+            uniforms.cameraPosition.value.copy(instance.activeCamera.position);
+        }
     }
 
     for(let obid in instance.objects) {
