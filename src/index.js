@@ -3012,16 +3012,37 @@ export class Scroll3dEngine {
         
         instance.shadowMapSize = size;
         
-        // Update shadow map size immediately if directional light exists
+        // Properly update shadow map size at runtime if directional light exists
         if(instance.directionalLight && instance.enhancedShadowQuality) {
+            // Store current shadow settings
+            const currentBias = instance.directionalLight.shadow.bias;
+            const currentNormalBias = instance.directionalLight.shadow.normalBias;
+            
+            // Dispose of the old shadow map to free WebGL resources
+            if(instance.directionalLight.shadow.map) {
+                instance.directionalLight.shadow.map.dispose();
+                instance.directionalLight.shadow.map = null;
+            }
+            
+            // Update shadow map size
             instance.directionalLight.shadow.mapSize.width = size;
             instance.directionalLight.shadow.mapSize.height = size;
+            
+            // Force shadow system to recreate the shadow map with new size
             instance.directionalLight.shadow.needsUpdate = true;
+            
+            // Restore shadow settings
+            instance.directionalLight.shadow.bias = currentBias;
+            instance.directionalLight.shadow.normalBias = currentNormalBias;
             
             console.log("Shadow map size updated to:", size + "x" + size);
         }
 
+        // Mark shadow system for complete update
         instance.renderer.shadowMap.needsUpdate = true;
+        
+        // Force a render to apply changes
+        instance.shouldRender = true;
         
         setCameraPosition(instance);
     }
