@@ -131,8 +131,9 @@ const MAX_PHI = 180;
 
 const DEF_APERTURE_RATIO = 1.25;
 
-const UV_TEXT_MIN = 0.01;
-const UV_TEXT_MAX = 0.99;
+// UV coordinates with better precision to reduce seams
+const UV_TEXT_MIN = 0.001;  // Reduced from 0.01 for better precision
+const UV_TEXT_MAX = 0.999;  // Reduced from 0.99 for better precision
 
 //const UV_TEXT_MIN = 0.02;
 //const UV_TEXT_MAX = 0.98;
@@ -1734,8 +1735,9 @@ export class Scroll3dEngine {
 
             const mesh = new Mesh(cellgeo, curAtlasMaterial);
 
-            const meshX = (data.x * instance.chunkSize) * 2;
-            const meshY = (data.y * instance.chunkSize) * 2;
+            // Use more precise positioning to avoid gaps between chunks
+            const meshX = Math.round((data.x * instance.chunkSize) * 2);
+            const meshY = Math.round((data.y * instance.chunkSize) * 2);
 
             mesh.position.set(meshX, 0, meshY);
 
@@ -2977,6 +2979,47 @@ export class Scroll3dEngine {
         instance.renderer.shadowMap.enabled = enabled;
 
         instance.renderer.shadowMap.needsUpdate = true;
+        
+        // Update shadow settings for all existing chunks
+        this.optimizeChunkShadows();
+    }
+    
+    optimizeChunkShadows() {
+        const instance = this;
+        
+        // Iterate through all chunks and optimize their shadow settings
+        for(let chunkId in instance.chunks) {
+            const chunk = instance.chunks[chunkId];
+            if(chunk && chunk.material) {
+                // Only cast shadows if shadows are enabled globally
+                chunk.castShadow = instance.shadows;
+                chunk.receiveShadow = true; // Always receive shadows for proper ground appearance
+            }
+        }
+    }
+    
+    /**
+     * Weld chunk edges together to reduce seams and shadow artifacts
+     */
+    weldChunkEdges() {
+        const instance = this;
+        
+        for(let chunkId in instance.chunks) {
+            const chunk = instance.chunks[chunkId];
+            if(!chunk || !chunk.geometry) continue;
+            
+            const geometry = chunk.geometry;
+            const threshold = 0.001; // Threshold for vertex welding
+            
+            // Merge vertices that are very close to each other (helps with edge continuity)
+            if(geometry.mergeVertices) {
+                geometry.mergeVertices(threshold);
+            }
+            
+            // Force geometry update
+            geometry.attributes.position.needsUpdate = true;
+            geometry.computeVertexNormals();
+        }
     }
 
     setAntialiasingEnabled(enabled) {
@@ -6117,7 +6160,9 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                     ux,
                     uy,
                     uz,
-                    obj.isDepressed
+                    obj.isDepressed,
+                    instance,
+                    data
                 );
 
                 let shouldSkip = false;
@@ -7905,17 +7950,27 @@ function drawTextureGridline(buildContext) {
     buildContext.stroke();
 }
 
-function getChunkTileNeighbor(data, x, y, z, dep) {
+function getChunkTileNeighbor(data, x, y, z, dep, instance, chunkData) {
 
     if(y < 0) {
         return null;
     }
 
-    if(x < 0 || z > data.length - 1) {
-        return null;
-    }
-
-    if(z < 0 || z > data[0].length - 1) {
+    // Check if we're looking outside current chunk boundaries
+    if(x < 0 || x >= data.length || z < 0 || z >= data[0].length) {
+        // We're looking outside the current chunk - check neighboring chunks
+        if(instance && chunkData) {
+            const neighborChunkX = chunkData.x + Math.floor(x / instance.chunkSize);
+            const neighborChunkZ = chunkData.y + Math.floor(z / instance.chunkSize);
+            
+            const neighborChunkId = neighborChunkX + ":" + neighborChunkZ + ":" + (chunkData.rOrder || "0");
+            const neighborChunk = instance.chunks[neighborChunkId];
+            
+            // If neighbor chunk exists and has the same structure, assume it blocks this face
+            if(neighborChunk) {
+                return { z: y, isDepressed: dep }; // Return a blocking tile
+            }
+        }
         return null;
     }
 
@@ -9438,7 +9493,9 @@ async function doWorkCanvasChunk(instance, data, callback) {
                             ux,
                             uy,
                             uz,
-                            obj.isDepressed
+                            obj.isDepressed,
+                            instance,
+                            data
                         );
 
                         let shouldSkip = false;
