@@ -2925,6 +2925,7 @@ export class Scroll3dEngine {
         }
 
         instance.renderScale = scale;
+        
         setInstanceSize(instance);
     }
 
