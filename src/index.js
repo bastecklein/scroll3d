@@ -2988,6 +2988,41 @@ export class Scroll3dEngine {
     }
     
     /**
+     * Set shadow map resolution at runtime
+     * @param {number} size - Shadow map size (must be power of 2: 512, 1024, 2048, 4096, 8192)
+     */
+    setShadowMapSize(size) {
+        const instance = this;
+        
+        // Validate that size is a power of 2
+        const validSizes = [512, 1024, 2048, 4096, 8192];
+        if (!validSizes.includes(size)) {
+            console.warn("Shadow map size must be a power of 2 (512, 1024, 2048, 4096, 8192). Using closest valid size.");
+            // Find closest valid size
+            size = validSizes.reduce((prev, curr) => 
+                Math.abs(curr - size) < Math.abs(prev - size) ? curr : prev
+            );
+        }
+        
+        if(instance.shadowMapSize === size) {
+            return; // No change needed
+        }
+        
+        instance.shadowMapSize = size;
+        
+        // Update shadow map size immediately if directional light exists
+        if(instance.directionalLight && instance.enhancedShadowQuality) {
+            instance.directionalLight.shadow.mapSize.width = size;
+            instance.directionalLight.shadow.mapSize.height = size;
+            instance.directionalLight.shadow.needsUpdate = true;
+            
+            console.log("Shadow map size updated to:", size + "x" + size);
+        }
+        
+        instance.shouldRender = true;
+    }
+    
+    /**
      * Control shadow bias mode for terrain vs character shadows
      * @param {boolean} useTerrainBias - True for terrain mode (fixes seams), false for character mode (accurate ground contact)
      */
