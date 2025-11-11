@@ -1116,6 +1116,7 @@ export class Scroll3dEngine {
 
         this.antialias = options.antialias || false;
         this.shadows = options.shadows || false;
+        this.optimizeChunkShadows = options.optimizeChunkShadows !== false; // Default to true
 
         this.squaredUp = false;
 
@@ -1731,6 +1732,11 @@ export class Scroll3dEngine {
 
             cellgeo.normalsNeedUpdate = true;
             cellgeo.computeVertexNormals();
+            
+            // Modify normals to reduce shadow receiving on side faces at chunk edges
+            if(instance.optimizeChunkShadows) {
+                instance.optimizeChunkShadowReceiving(cellgeo);
+            }
 
             const mesh = new Mesh(cellgeo, curAtlasMaterial);
 
@@ -2977,6 +2983,53 @@ export class Scroll3dEngine {
         instance.renderer.shadowMap.enabled = enabled;
 
         instance.renderer.shadowMap.needsUpdate = true;
+    }
+
+    optimizeChunkShadowReceiving(geometry) {
+        const normals = geometry.attributes.normal.array;
+        const positions = geometry.attributes.position.array;
+        
+        // Iterate through all vertices and modify normals for side faces at chunk edges
+        for(let i = 0; i < normals.length; i += 3) {
+            const nx = normals[i];
+            const ny = normals[i + 1]; 
+            const nz = normals[i + 2];
+            
+            // Check if this is a side face (normal pointing horizontally)
+            // Top faces have ny close to 1, side faces have ny close to 0
+            if(Math.abs(ny) < 0.5) { // This is a side face
+                // Get the vertex position to check if it's at chunk edge
+                const vx = positions[i];
+                const vz = positions[i + 2];
+                
+                // Check if vertex is at the absolute edge of the chunk
+                const chunkEdgeThreshold = 1.9; // Just under the chunk size of 2
+                const isAtEdge = (
+                    Math.abs(vx % (this.chunkSize * 2)) < 0.1 || 
+                    Math.abs(vx % (this.chunkSize * 2)) > chunkEdgeThreshold ||
+                    Math.abs(vz % (this.chunkSize * 2)) < 0.1 || 
+                    Math.abs(vz % (this.chunkSize * 2)) > chunkEdgeThreshold
+                );
+                
+                if(isAtEdge) {
+                    // Reduce shadow receiving by pointing normal slightly upward
+                    // This makes the surface less receptive to shadows from the side
+                    normals[i] = nx * 0.3; // Reduce horizontal component
+                    normals[i + 1] = Math.max(ny, 0.7); // Ensure upward component
+                    normals[i + 2] = nz * 0.3; // Reduce horizontal component
+                    
+                    // Normalize the modified normal
+                    const length = Math.sqrt(normals[i]**2 + normals[i+1]**2 + normals[i+2]**2);
+                    if(length > 0) {
+                        normals[i] /= length;
+                        normals[i + 1] /= length;
+                        normals[i + 2] /= length;
+                    }
+                }
+            }
+        }
+        
+        geometry.attributes.normal.needsUpdate = true;
     }
 
     setAntialiasingEnabled(enabled) {
