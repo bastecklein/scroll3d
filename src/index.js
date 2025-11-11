@@ -1734,8 +1734,8 @@ export class Scroll3dEngine {
 
             const mesh = new Mesh(cellgeo, curAtlasMaterial);
 
-            const meshX = (data.x * instance.chunkSize) * 2;
-            const meshY = (data.y * instance.chunkSize) * 2;
+            const meshX = Math.round((data.x * instance.chunkSize) * 2);
+            const meshY = Math.round((data.y * instance.chunkSize) * 2);
 
             mesh.position.set(meshX, 0, meshY);
 
@@ -9652,8 +9652,8 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
     const mesh = new Mesh(geometry, material);
 
-    const meshX = (data.x * instance.chunkSize) * 2;
-    const meshY = (data.y * instance.chunkSize) * 2;
+    const meshX = Math.round((data.x * instance.chunkSize) * 2);
+    const meshY = Math.round((data.y * instance.chunkSize) * 2);
 
     mesh.position.set(meshX, 0, meshY);
 
