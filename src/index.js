@@ -2985,6 +2985,8 @@ export class Scroll3dEngine {
         instance.renderer.shadowMap.enabled = enabled;
 
         instance.renderer.shadowMap.needsUpdate = true;
+
+        setCameraPosition(instance);
     }
     
     /**
@@ -3018,8 +3020,10 @@ export class Scroll3dEngine {
             
             console.log("Shadow map size updated to:", size + "x" + size);
         }
+
+        instance.renderer.shadowMap.needsUpdate = true;
         
-        instance.shouldRender = true;
+        setCameraPosition(instance);
     }
     
     /**
@@ -3040,7 +3044,7 @@ export class Scroll3dEngine {
             instance.directionalLight.shadow.bias = useTerrainBias ? -0.0005 : 0;
         }
         
-        instance.shouldRender = true;
+        setCameraPosition(instance);
     }
     
     /**
@@ -3068,7 +3072,7 @@ export class Scroll3dEngine {
             }
         }
         
-        instance.shouldRender = true;
+        setCameraPosition(instance);
     }
 
     setAntialiasingEnabled(enabled) {
