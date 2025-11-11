@@ -966,7 +966,9 @@ export class Scroll3dEngine {
         this.useVRControllerGrips = options.useVRControllerGrips || true;
 
         this.enhancedShadowQuality = options.enhancedShadowQuality !== false; // Default to true
-        this.shadowMapSize = options.shadowMapSize || 1024; // Default high resolution
+        this.shadowMapSize = options.shadowMapSize || 2048; // Default high resolution
+        this.useTerrainShadowBias = options.useTerrainShadowBias !== false; // Default to true for terrain seams
+        this.usePerMaterialShadowBias = options.usePerMaterialShadowBias !== false; // Per-material bias for chunks
 
         this.dynamicLighting = true;
 
@@ -1751,6 +1753,9 @@ export class Scroll3dEngine {
             }
 
             const chunkId = data.x + ":" + data.y + ":" + rOrder;
+
+            // Apply per-material shadow bias for chunks to fix seam artifacts
+            applyChunkShadowBias(mesh, instance);
 
             instance.removeChunk(data.x, data.y, rOrder, 500);
 
@@ -2980,6 +2985,58 @@ export class Scroll3dEngine {
         instance.renderer.shadowMap.enabled = enabled;
 
         instance.renderer.shadowMap.needsUpdate = true;
+    }
+    
+    /**
+     * Control shadow bias mode for terrain vs character shadows
+     * @param {boolean} useTerrainBias - True for terrain mode (fixes seams), false for character mode (accurate ground contact)
+     */
+    setTerrainShadowBias(useTerrainBias) {
+        const instance = this;
+        
+        if(instance.useTerrainShadowBias === useTerrainBias) {
+            return;
+        }
+        
+        instance.useTerrainShadowBias = useTerrainBias;
+        
+        // Update the shadow bias immediately (only if not using per-material bias)
+        if(instance.directionalLight && instance.enhancedShadowQuality && !instance.usePerMaterialShadowBias) {
+            instance.directionalLight.shadow.bias = useTerrainBias ? -0.0005 : 0;
+            console.log("Shadow bias mode changed - terrainMode:", useTerrainBias, "bias:", instance.directionalLight.shadow.bias);
+        }
+        
+        instance.shouldRender = true;
+    }
+    
+    /**
+     * Enable/disable per-material shadow bias (chunks get bias, characters don't)
+     * This is the "best of both worlds" approach for shadow quality
+     * @param {boolean} usePerMaterialBias - True for per-material bias, false for global bias
+     */
+    setPerMaterialShadowBias(usePerMaterialBias) {
+        const instance = this;
+        
+        if(instance.usePerMaterialShadowBias === usePerMaterialBias) {
+            return;
+        }
+        
+        instance.usePerMaterialShadowBias = usePerMaterialBias;
+        
+        // Update shadow settings immediately
+        if(instance.directionalLight && instance.enhancedShadowQuality) {
+            if(usePerMaterialBias) {
+                // Set global bias to zero, chunks will handle their own bias
+                instance.directionalLight.shadow.bias = 0;
+                console.log("Per-material shadow bias ENABLED - chunks get bias, characters get accurate shadows");
+            } else {
+                // Revert to global terrain bias setting
+                instance.directionalLight.shadow.bias = instance.useTerrainShadowBias ? -0.0005 : 0;
+                console.log("Per-material shadow bias DISABLED - using global bias:", instance.directionalLight.shadow.bias);
+            }
+        }
+        
+        instance.shouldRender = true;
     }
 
     setAntialiasingEnabled(enabled) {
@@ -7120,12 +7177,23 @@ function normalizeSunPosition(instance) {
         if(instance.enhancedShadowQuality) {
             instance.directionalLight.shadow.mapSize.width = instance.shadowMapSize;
             instance.directionalLight.shadow.mapSize.height = instance.shadowMapSize;
-            //instance.directionalLight.shadow.bias = -0.0005;        // Reduce self-shadowing artifacts
-            instance.directionalLight.shadow.normalBias = 0.01;     // Smooth normal-based bias for better edges
             
-            //console.log("Enhanced shadow settings applied - Resolution:", instance.shadowMapSize + "x" + instance.shadowMapSize, "bias:", instance.directionalLight.shadow.bias);
+            // Per-material bias: Always zero for global, chunks get custom materials with bias
+            if(instance.usePerMaterialShadowBias) {
+                instance.directionalLight.shadow.bias = 0; // Global shadow bias zero
+                console.log("Enhanced shadow settings - Resolution:", instance.shadowMapSize + "x" + instance.shadowMapSize, 
+                    "using per-material bias for chunks");
+            } else {
+                // Dynamic bias: Use terrain bias for chunk seams, zero bias for characters
+                instance.directionalLight.shadow.bias = instance.useTerrainShadowBias ? -0.0005 : 0;
+                console.log("Enhanced shadow settings - Resolution:", instance.shadowMapSize + "x" + instance.shadowMapSize, 
+                    "bias:", instance.directionalLight.shadow.bias, "terrainMode:", instance.useTerrainShadowBias);
+            }
+            
+            instance.directionalLight.shadow.normalBias = 0.01;     // Smooth normal-based bias for better edges
         } else {
-            //console.log("Using default shadow settings");
+            instance.directionalLight.shadow.bias = 0; // Always zero for default mode
+            console.log("Using default shadow settings");
         }
 
         if(instance.hemisphereLight) {
@@ -9229,6 +9297,48 @@ function calculateCurrentFPS(instance) {
     }
 }
 
+/**
+ * Apply per-chunk shadow bias by modifying mesh position during shadow pass
+ * This creates chunk-specific bias without affecting character shadows
+ */
+function applyChunkShadowBias(mesh, instance) {
+    if (!instance.usePerMaterialShadowBias) {
+        return; // Skip if per-material bias disabled
+    }
+    
+    // Store reference to original onBeforeRender if it exists
+    const originalOnBeforeRender = mesh.onBeforeRender;
+    
+    mesh.onBeforeRender = function(renderer, scene, camera, geometry, material, group) {
+        // Call original onBeforeRender if it exists
+        if (originalOnBeforeRender) {
+            originalOnBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
+        }
+        
+        // Check if this is a shadow pass (camera is the shadow camera)
+        if (camera.isDirectionalLightShadow || camera.isSpotLightShadow || camera.isPointLightShadow) {
+            // Apply terrain-specific bias by slightly offsetting the mesh during shadow rendering
+            this.position.y -= 0.001; // Small offset to reduce self-shadowing at chunk edges
+        }
+    };
+    
+    // Store reference to original onAfterRender if it exists
+    const originalOnAfterRender = mesh.onAfterRender;
+    
+    mesh.onAfterRender = function(renderer, scene, camera, geometry, material, group) {
+        // Check if this was a shadow pass
+        if (camera.isDirectionalLightShadow || camera.isSpotLightShadow || camera.isPointLightShadow) {
+            // Restore original position after shadow rendering
+            this.position.y += 0.001;
+        }
+        
+        // Call original onAfterRender if it exists
+        if (originalOnAfterRender) {
+            originalOnAfterRender.call(this, renderer, scene, camera, geometry, material, group);
+        }
+    };
+}
+
 function addCanvasChunk(instance, data) {
     return new Promise((resolve, reject) => {
         doWorkCanvasChunk(instance, data, function() {
@@ -9679,6 +9789,9 @@ async function doWorkCanvasChunk(instance, data, callback) {
     } else {
         mesh.castShadow = true;
     }
+
+    // Apply per-material shadow bias for chunks to fix seam artifacts
+    applyChunkShadowBias(mesh, instance);
 
     instance.removeChunk(data.x, data.y, rOrder, 500);
 
