@@ -3003,7 +3003,6 @@ export class Scroll3dEngine {
         // Update the shadow bias immediately (only if not using per-material bias)
         if(instance.directionalLight && instance.enhancedShadowQuality && !instance.usePerMaterialShadowBias) {
             instance.directionalLight.shadow.bias = useTerrainBias ? -0.0005 : 0;
-            console.log("Shadow bias mode changed - terrainMode:", useTerrainBias, "bias:", instance.directionalLight.shadow.bias);
         }
         
         instance.shouldRender = true;
@@ -3028,11 +3027,9 @@ export class Scroll3dEngine {
             if(usePerMaterialBias) {
                 // Set global bias to zero, chunks will handle their own bias
                 instance.directionalLight.shadow.bias = 0;
-                console.log("Per-material shadow bias ENABLED - chunks get bias, characters get accurate shadows");
             } else {
                 // Revert to global terrain bias setting
                 instance.directionalLight.shadow.bias = instance.useTerrainShadowBias ? -0.0005 : 0;
-                console.log("Per-material shadow bias DISABLED - using global bias:", instance.directionalLight.shadow.bias);
             }
         }
         
@@ -7181,19 +7178,14 @@ function normalizeSunPosition(instance) {
             // Per-material bias: Always zero for global, chunks get custom materials with bias
             if(instance.usePerMaterialShadowBias) {
                 instance.directionalLight.shadow.bias = 0; // Global shadow bias zero
-                console.log("Enhanced shadow settings - Resolution:", instance.shadowMapSize + "x" + instance.shadowMapSize, 
-                    "using per-material bias for chunks");
             } else {
                 // Dynamic bias: Use terrain bias for chunk seams, zero bias for characters
                 instance.directionalLight.shadow.bias = instance.useTerrainShadowBias ? -0.0005 : 0;
-                console.log("Enhanced shadow settings - Resolution:", instance.shadowMapSize + "x" + instance.shadowMapSize, 
-                    "bias:", instance.directionalLight.shadow.bias, "terrainMode:", instance.useTerrainShadowBias);
             }
             
             instance.directionalLight.shadow.normalBias = 0.01;     // Smooth normal-based bias for better edges
         } else {
             instance.directionalLight.shadow.bias = 0; // Always zero for default mode
-            console.log("Using default shadow settings");
         }
 
         if(instance.hemisphereLight) {
