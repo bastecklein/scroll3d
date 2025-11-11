@@ -1118,8 +1118,9 @@ export class Scroll3dEngine {
         this.shadows = options.shadows || false;
         this.optimizeChunkShadows = options.optimizeChunkShadows !== false; // Default to true
         this.debugNoChunkShadows = options.debugNoChunkShadows || false;
+        this.aggressiveChunkShadowFix = options.aggressiveChunkShadowFix !== false; // Default to true
         
-        console.log("Scroll3D Engine initialized - optimizeChunkShadows:", this.optimizeChunkShadows, "debugNoChunkShadows:", this.debugNoChunkShadows);
+        console.log("Scroll3D Engine initialized - optimizeChunkShadows:", this.optimizeChunkShadows, "debugNoChunkShadows:", this.debugNoChunkShadows, "aggressive:", this.aggressiveChunkShadowFix);
 
         this.squaredUp = false;
 
@@ -3005,8 +3006,10 @@ export class Scroll3dEngine {
         const normals = geometry.attributes.normal.array;
         const positions = geometry.attributes.position.array;
         let modifiedCount = 0;
+        let eliminatedCount = 0;
         
-        console.log(`Starting shadow optimization for chunk with ${normals.length/3} vertices`);
+        const isAggressive = this.aggressiveChunkShadowFix;
+        console.log(`Starting ${isAggressive ? 'AGGRESSIVE' : 'NORMAL'} shadow optimization for chunk with ${normals.length/3} vertices`);
         
         // Iterate through all vertices and modify normals for side faces at chunk edges
         for(let i = 0; i < normals.length; i += 3) {
@@ -3014,16 +3017,16 @@ export class Scroll3dEngine {
             const ny = normals[i + 1]; 
             const nz = normals[i + 2];
             
-            // Check if this is a side face (normal pointing horizontally)
-            // Top faces have ny close to 1, side faces have ny close to 0
-            if(Math.abs(ny) < 0.7) { // Made more inclusive - was 0.5
+            // Adjust detection based on aggressiveness
+            const nyThreshold = isAggressive ? 0.9 : 0.7; // Much more aggressive detection
+            if(Math.abs(ny) < nyThreshold) {
                 // Get the vertex position to check if it's at chunk edge
                 const vx = positions[i];
                 const vz = positions[i + 2];
                 
-                // More aggressive edge detection - check if near any chunk boundary
+                // Edge detection based on aggressiveness
                 const chunkSize = this.chunkSize * 2; // Scaled chunk size
-                const edgeThreshold = 0.5; // Wider edge detection
+                const edgeThreshold = isAggressive ? 2.0 : 0.5; // Much wider zone when aggressive
                 
                 const xMod = Math.abs(vx % chunkSize);
                 const zMod = Math.abs(vz % chunkSize);
@@ -3034,17 +3037,40 @@ export class Scroll3dEngine {
                 );
                 
                 if(isNearEdge) {
-                    // Much more aggressive normal modification
-                    normals[i] = nx * 0.1; // Heavily reduce horizontal component
-                    normals[i + 1] = Math.max(Math.abs(ny), 0.9); // Force strong upward component
-                    normals[i + 2] = nz * 0.1; // Heavily reduce horizontal component
-                    
-                    // Normalize the modified normal
-                    const length = Math.sqrt(normals[i]**2 + normals[i+1]**2 + normals[i+2]**2);
-                    if(length > 0) {
-                        normals[i] /= length;
-                        normals[i + 1] /= length;
-                        normals[i + 2] /= length;
+                    if(isAggressive) {
+                        // EXTREME normal modification to eliminate seam shadows completely
+                        if(Math.abs(ny) < 0.3) { // Pure side faces - eliminate shadow reception entirely
+                            normals[i] = 0; // Eliminate horizontal components completely
+                            normals[i + 1] = 1; // Force straight up normal
+                            normals[i + 2] = 0; // Eliminate horizontal components completely
+                            eliminatedCount++;
+                        } else {
+                            // Partial side faces - heavily reduce shadow reception
+                            normals[i] = nx * 0.05; // Almost eliminate horizontal component
+                            normals[i + 1] = Math.max(Math.abs(ny), 0.95); // Force very strong upward component
+                            normals[i + 2] = nz * 0.05; // Almost eliminate horizontal component
+                            
+                            // Normalize the modified normal
+                            const length = Math.sqrt(normals[i]**2 + normals[i+1]**2 + normals[i+2]**2);
+                            if(length > 0) {
+                                normals[i] /= length;
+                                normals[i + 1] /= length;
+                                normals[i + 2] /= length;
+                            }
+                        }
+                    } else {
+                        // More conservative normal modification
+                        normals[i] = nx * 0.3; // Reduce horizontal component
+                        normals[i + 1] = Math.max(Math.abs(ny), 0.7); // Ensure upward component
+                        normals[i + 2] = nz * 0.3; // Reduce horizontal component
+                        
+                        // Normalize the modified normal
+                        const length = Math.sqrt(normals[i]**2 + normals[i+1]**2 + normals[i+2]**2);
+                        if(length > 0) {
+                            normals[i] /= length;
+                            normals[i + 1] /= length;
+                            normals[i + 2] /= length;
+                        }
                     }
                     
                     modifiedCount++;
@@ -3053,7 +3079,12 @@ export class Scroll3dEngine {
         }
         
         // Debug output to see if it's working
-        console.log(`Chunk shadow optimization: modified ${modifiedCount} vertices out of ${normals.length/3}`);
+        const mode = isAggressive ? 'AGGRESSIVE' : 'NORMAL';
+        if(isAggressive && eliminatedCount > 0) {
+            console.log(`${mode} shadow optimization: modified ${modifiedCount} vertices (${eliminatedCount} completely eliminated) out of ${normals.length/3}`);
+        } else {
+            console.log(`${mode} shadow optimization: modified ${modifiedCount} vertices out of ${normals.length/3}`);
+        }
         
         geometry.attributes.normal.needsUpdate = true;
     }
