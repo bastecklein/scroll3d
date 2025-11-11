@@ -965,6 +965,9 @@ export class Scroll3dEngine {
 
         this.useVRControllerGrips = options.useVRControllerGrips || true;
 
+        this.enhancedShadowQuality = options.enhancedShadowQuality !== false; // Default to true
+        this.shadowMapSize = options.shadowMapSize || 2048; // Default high resolution
+
         this.dynamicLighting = true;
 
         this.sizeOutMultiplier = DEF_SIZE_OUT_MULTIPLIER;
@@ -1116,11 +1119,6 @@ export class Scroll3dEngine {
 
         this.antialias = options.antialias || false;
         this.shadows = options.shadows || false;
-        this.optimizeChunkShadows = options.optimizeChunkShadows !== false; // Default to true
-        this.debugNoChunkShadows = options.debugNoChunkShadows || false;
-        this.aggressiveChunkShadowFix = options.aggressiveChunkShadowFix !== false; // Default to true
-        
-        console.log("Scroll3D Engine initialized - optimizeChunkShadows:", this.optimizeChunkShadows, "debugNoChunkShadows:", this.debugNoChunkShadows, "aggressive:", this.aggressiveChunkShadowFix);
 
         this.squaredUp = false;
 
@@ -1624,15 +1622,10 @@ export class Scroll3dEngine {
     addChunk(data) {
         const instance = this;
 
-        console.log("addChunk called - chunkMode:", instance.chunkMode);
-
         if(instance.chunkMode == "canvas") {
-            console.log("Using canvas chunk mode - shadow optimization AVAILABLE");
             addCanvasChunk(instance, data);
             return;
         }
-
-        console.log("Using geometry chunk mode - shadow optimization available");
 
         const defTexture = data.defTexture;
 
@@ -1741,19 +1734,6 @@ export class Scroll3dEngine {
 
             cellgeo.normalsNeedUpdate = true;
             cellgeo.computeVertexNormals();
-            
-            console.log("Chunk creation - optimizeChunkShadows:", instance.optimizeChunkShadows, "debugNoChunkShadows:", instance.debugNoChunkShadows);
-            
-            // Modify normals to reduce shadow receiving on side faces at chunk edges
-            if(instance.optimizeChunkShadows) {
-                console.log("About to call optimizeChunkShadowReceiving");
-                instance.optimizeChunkShadowReceiving(cellgeo);
-            }
-            
-            // Alternative: Try disabling shadows completely for testing
-            if(instance.debugNoChunkShadows) {
-                console.log("Debug mode: Disabling chunk shadow receiving entirely");
-            }
 
             const mesh = new Mesh(cellgeo, curAtlasMaterial);
 
@@ -1762,7 +1742,7 @@ export class Scroll3dEngine {
 
             mesh.position.set(meshX, 0, meshY);
 
-            mesh.receiveShadow = !instance.debugNoChunkShadows;
+            mesh.receiveShadow = true;
 
             if(data.castShadow != undefined) {
                 mesh.castShadow = data.castShadow;
@@ -3000,99 +2980,6 @@ export class Scroll3dEngine {
         instance.renderer.shadowMap.enabled = enabled;
 
         instance.renderer.shadowMap.needsUpdate = true;
-    }
-
-    optimizeChunkShadowReceiving(geometry) {
-        const normals = geometry.attributes.normal.array;
-        const positions = geometry.attributes.position.array;
-        let modifiedCount = 0;
-        let eliminatedCount = 0;
-        
-        const isAggressive = this.aggressiveChunkShadowFix;
-        console.log(`Starting ${isAggressive ? 'AGGRESSIVE' : 'NORMAL'} shadow optimization for chunk with ${normals.length/3} vertices`);
-        
-        // Iterate through all vertices and modify normals for side faces at chunk edges
-        for(let i = 0; i < normals.length; i += 3) {
-            const nx = normals[i];
-            const ny = normals[i + 1]; 
-            const nz = normals[i + 2];
-            
-            // Adjust detection based on aggressiveness
-            const nyThreshold = isAggressive ? 0.9 : 0.7; // Much more aggressive detection
-            if(Math.abs(ny) < nyThreshold) {
-                // Get the vertex position to check if it's at chunk edge
-                const vx = positions[i];
-                const vz = positions[i + 2];
-                
-                // Edge detection based on aggressiveness
-                const chunkSize = this.chunkSize * 2; // Scaled chunk size
-                const edgeThreshold = isAggressive ? 2.0 : 0.5; // Much wider zone when aggressive
-                
-                const xMod = Math.abs(vx % chunkSize);
-                const zMod = Math.abs(vz % chunkSize);
-                
-                const isNearEdge = (
-                    xMod < edgeThreshold || xMod > (chunkSize - edgeThreshold) ||
-                    zMod < edgeThreshold || zMod > (chunkSize - edgeThreshold)
-                );
-                
-                if(isNearEdge) {
-                    if(isAggressive) {
-                        // EXTREME normal modification to eliminate seam shadows completely
-                        if(Math.abs(ny) < 0.3) { // Pure side faces - eliminate shadow reception entirely
-                            normals[i] = 0; // Eliminate horizontal components completely
-                            normals[i + 1] = 1; // Force straight up normal
-                            normals[i + 2] = 0; // Eliminate horizontal components completely
-                            eliminatedCount++;
-                        } else {
-                            // Partial side faces - heavily reduce shadow reception
-                            normals[i] = nx * 0.05; // Almost eliminate horizontal component
-                            normals[i + 1] = Math.max(Math.abs(ny), 0.95); // Force very strong upward component
-                            normals[i + 2] = nz * 0.05; // Almost eliminate horizontal component
-                            
-                            // Normalize the modified normal
-                            const length = Math.sqrt(normals[i]**2 + normals[i+1]**2 + normals[i+2]**2);
-                            if(length > 0) {
-                                normals[i] /= length;
-                                normals[i + 1] /= length;
-                                normals[i + 2] /= length;
-                            }
-                        }
-                    } else {
-                        // More conservative normal modification
-                        normals[i] = nx * 0.3; // Reduce horizontal component
-                        normals[i + 1] = Math.max(Math.abs(ny), 0.7); // Ensure upward component
-                        normals[i + 2] = nz * 0.3; // Reduce horizontal component
-                        
-                        // Normalize the modified normal
-                        const length = Math.sqrt(normals[i]**2 + normals[i+1]**2 + normals[i+2]**2);
-                        if(length > 0) {
-                            normals[i] /= length;
-                            normals[i + 1] /= length;
-                            normals[i + 2] /= length;
-                        }
-                    }
-                    
-                    modifiedCount++;
-                }
-            }
-        }
-        
-        // Debug output to see if it's working
-        const mode = isAggressive ? 'AGGRESSIVE' : 'NORMAL';
-        if(isAggressive && eliminatedCount > 0) {
-            console.log(`${mode} shadow optimization: modified ${modifiedCount} vertices (${eliminatedCount} completely eliminated) out of ${normals.length/3}`);
-        } else {
-            console.log(`${mode} shadow optimization: modified ${modifiedCount} vertices out of ${normals.length/3}`);
-        }
-        
-        geometry.attributes.normal.needsUpdate = true;
-    }
-    
-    // Alternative approach: Create separate meshes for top and side faces
-    setChunkSideShadowsEnabled(enabled) {
-        this.chunkSideShadows = enabled;
-        console.log(`Chunk side shadows ${enabled ? 'enabled' : 'disabled'}`);
     }
 
     setAntialiasingEnabled(enabled) {
@@ -7229,6 +7116,18 @@ function normalizeSunPosition(instance) {
 
         instance.directionalLight.shadow.camera.updateProjectionMatrix();
 
+        // Enhanced shadow map settings to reduce chunk seam artifacts
+        if(instance.enhancedShadowQuality) {
+            instance.directionalLight.shadow.mapSize.width = instance.shadowMapSize;
+            instance.directionalLight.shadow.mapSize.height = instance.shadowMapSize;
+            instance.directionalLight.shadow.bias = -0.0005;        // Reduce self-shadowing artifacts
+            instance.directionalLight.shadow.normalBias = 0.01;     // Smooth normal-based bias for better edges
+            
+            console.log("Enhanced shadow settings applied - Resolution:", instance.shadowMapSize + "x" + instance.shadowMapSize, "bias:", instance.directionalLight.shadow.bias);
+        } else {
+            console.log("Using default shadow settings");
+        }
+
         if(instance.hemisphereLight) {
 
             let useHemiIntensity = (instance.hemiBrightness * 0.55) + 0.2;
@@ -9554,9 +9453,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                             ux,
                             uy,
                             uz,
-                            obj.isDepressed,
-                            instance,
-                            data
+                            obj.isDepressed
                         );
 
                         let shouldSkip = false;
@@ -9730,14 +9627,6 @@ async function doWorkCanvasChunk(instance, data, callback) {
     geometry.normalsNeedUpdate = true;
     geometry.computeVertexNormals();
 
-    console.log("Canvas chunk creation - optimizeChunkShadows:", instance.optimizeChunkShadows, "debugNoChunkShadows:", instance.debugNoChunkShadows);
-    
-    // Apply shadow optimization for canvas chunks too
-    if(instance.optimizeChunkShadows) {
-        console.log("About to call optimizeChunkShadowReceiving for canvas chunk");
-        instance.optimizeChunkShadowReceiving(geometry);
-    }
-
     // ==== CREATE TEXTURE & MESH ====
     const diffuseTexture = new CanvasTexture(canvasItems.tx);
     diffuseTexture.wrapS = RepeatWrapping;
@@ -9783,11 +9672,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
     mesh.position.set(meshX, 0, meshY);
 
-    mesh.receiveShadow = !instance.debugNoChunkShadows;
-    
-    if(instance.debugNoChunkShadows) {
-        console.log("Canvas chunk: Shadow receiving disabled for debugging");
-    }
+    mesh.receiveShadow = true;
 
     if(data.castShadow != undefined) {
         mesh.castShadow = data.castShadow;
