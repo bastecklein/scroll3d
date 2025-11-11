@@ -966,7 +966,7 @@ export class Scroll3dEngine {
         this.useVRControllerGrips = options.useVRControllerGrips || true;
 
         this.enhancedShadowQuality = options.enhancedShadowQuality !== false; // Default to true
-        this.shadowMapSize = options.shadowMapSize || 2048; // Default high resolution
+        this.shadowMapSize = options.shadowMapSize || 1024; // Default high resolution
 
         this.dynamicLighting = true;
 
@@ -7121,7 +7121,7 @@ function normalizeSunPosition(instance) {
             instance.directionalLight.shadow.mapSize.width = instance.shadowMapSize;
             instance.directionalLight.shadow.mapSize.height = instance.shadowMapSize;
             //instance.directionalLight.shadow.bias = -0.0005;        // Reduce self-shadowing artifacts
-            //instance.directionalLight.shadow.normalBias = 0.01;     // Smooth normal-based bias for better edges
+            instance.directionalLight.shadow.normalBias = 0.01;     // Smooth normal-based bias for better edges
             
             //console.log("Enhanced shadow settings applied - Resolution:", instance.shadowMapSize + "x" + instance.shadowMapSize, "bias:", instance.directionalLight.shadow.bias);
         } else {
