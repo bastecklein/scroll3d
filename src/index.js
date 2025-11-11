@@ -1117,6 +1117,9 @@ export class Scroll3dEngine {
         this.antialias = options.antialias || false;
         this.shadows = options.shadows || false;
         this.optimizeChunkShadows = options.optimizeChunkShadows !== false; // Default to true
+        this.debugNoChunkShadows = options.debugNoChunkShadows || false;
+        
+        console.log("Scroll3D Engine initialized - optimizeChunkShadows:", this.optimizeChunkShadows, "debugNoChunkShadows:", this.debugNoChunkShadows);
 
         this.squaredUp = false;
 
@@ -1620,10 +1623,15 @@ export class Scroll3dEngine {
     addChunk(data) {
         const instance = this;
 
+        console.log("addChunk called - chunkMode:", instance.chunkMode);
+
         if(instance.chunkMode == "canvas") {
+            console.log("Using canvas chunk mode - shadow optimization AVAILABLE");
             addCanvasChunk(instance, data);
             return;
         }
+
+        console.log("Using geometry chunk mode - shadow optimization available");
 
         const defTexture = data.defTexture;
 
@@ -1733,8 +1741,11 @@ export class Scroll3dEngine {
             cellgeo.normalsNeedUpdate = true;
             cellgeo.computeVertexNormals();
             
+            console.log("Chunk creation - optimizeChunkShadows:", instance.optimizeChunkShadows, "debugNoChunkShadows:", instance.debugNoChunkShadows);
+            
             // Modify normals to reduce shadow receiving on side faces at chunk edges
             if(instance.optimizeChunkShadows) {
+                console.log("About to call optimizeChunkShadowReceiving");
                 instance.optimizeChunkShadowReceiving(cellgeo);
             }
             
@@ -9512,7 +9523,9 @@ async function doWorkCanvasChunk(instance, data, callback) {
                             ux,
                             uy,
                             uz,
-                            obj.isDepressed
+                            obj.isDepressed,
+                            instance,
+                            data
                         );
 
                         let shouldSkip = false;
@@ -9686,6 +9699,14 @@ async function doWorkCanvasChunk(instance, data, callback) {
     geometry.normalsNeedUpdate = true;
     geometry.computeVertexNormals();
 
+    console.log("Canvas chunk creation - optimizeChunkShadows:", instance.optimizeChunkShadows, "debugNoChunkShadows:", instance.debugNoChunkShadows);
+    
+    // Apply shadow optimization for canvas chunks too
+    if(instance.optimizeChunkShadows) {
+        console.log("About to call optimizeChunkShadowReceiving for canvas chunk");
+        instance.optimizeChunkShadowReceiving(geometry);
+    }
+
     // ==== CREATE TEXTURE & MESH ====
     const diffuseTexture = new CanvasTexture(canvasItems.tx);
     diffuseTexture.wrapS = RepeatWrapping;
@@ -9731,7 +9752,11 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
     mesh.position.set(meshX, 0, meshY);
 
-    mesh.receiveShadow = true;
+    mesh.receiveShadow = !instance.debugNoChunkShadows;
+    
+    if(instance.debugNoChunkShadows) {
+        console.log("Canvas chunk: Shadow receiving disabled for debugging");
+    }
 
     if(data.castShadow != undefined) {
         mesh.castShadow = data.castShadow;
