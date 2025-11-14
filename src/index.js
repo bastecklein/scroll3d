@@ -845,7 +845,8 @@ export function getInstance(holder, options) {
             adl: options.adl || window.adl || null,
             down: onPadDown,
             up: onPadUp,
-            velocity: onPadVelocity
+            velocity: onPadVelocity,
+            onDisconnect: onPadDisconnect
         });
 
         GPH.setManualPolling(true);
@@ -1107,6 +1108,7 @@ export class Scroll3dEngine {
         this.padUp = null;
         this.padVelocity = null;
         this.uiGamepadElement = null;
+        this.gamepadDisconnectFunction = null;
 
         this.padControlMethod = "standard";
 
@@ -3269,12 +3271,13 @@ export class Scroll3dEngine {
         });
     }
 
-    setGamepadListeners(down, up, velocity, blockADL = false) {
+    setGamepadListeners(down, up, velocity, blockADL = false, onDisconnect = null) {
         const instance = this;
 
         instance.padDown = down;
         instance.padUp = up;
         instance.padVelocity = velocity;
+        instance.gamepadDisconnectFunction = onDisconnect;
 
         if(blockADL) {
             GPH.setADLInstance(null);
@@ -4081,6 +4084,22 @@ function onPadVelocity(id, axis, val) {
         }
     }
 
+}
+
+function onPadDisconnect(e) {
+    const padId = e.idx;
+
+    for(let sid in scrollInstances) {
+        const instance = scrollInstances[sid];
+
+        if(instance.gamepadDisconnectFunction) {
+            instance.gamepadDisconnectFunction(padId);
+        }
+
+        if(instance.lastPadId == padId) {
+            instance.lastPadId = null;
+        }
+    }
 }
 
 function resetAtlasTexture() {
