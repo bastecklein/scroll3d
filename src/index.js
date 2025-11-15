@@ -840,13 +840,21 @@ window.addEventListener("resize", onResize);
 document.addEventListener("visibilitychange", onVisibilityChange);
 
 export function getInstance(holder, options) {
+
+    let singleGamepadMode = true;
+
+    if(options.singleGamepadMode !== undefined) {
+        singleGamepadMode = options.singleGamepadMode;
+    }
+
     if(!gphInit) {
         GPH.register({
             adl: options.adl || window.adl || null,
             down: onPadDown,
             up: onPadUp,
             velocity: onPadVelocity,
-            onDisconnect: onPadDisconnect
+            onDisconnect: onPadDisconnect,
+            singleOnly: singleGamepadMode
         });
 
         GPH.setManualPolling(true);
