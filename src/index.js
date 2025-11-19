@@ -588,7 +588,8 @@ const EnhancedWaterShader = {
         'waterTexture': { value: null },
         'hasTexture': { value: 0.0 },
         'textureScale': { value: 8.0 },
-        'cameraPosCustom': { value: new Vector3() }
+        'cameraPosCustom': { value: new Vector3() },
+        'worldOffset': { value: new Vector3() }
     },
     vertexShader: `
         precision highp float;
@@ -596,14 +597,16 @@ const EnhancedWaterShader = {
         uniform float time;
         uniform float waveScale;
         uniform float waveSpeed;
+        uniform vec3 worldOffset;
         
         varying vec2 vUv;
         varying vec3 vWorldPosition;
         varying vec3 vWorldNormal;
         varying vec3 vViewPosition;
         varying float vDepth;
+        varying vec2 vWorldUV;
         
-        // Simplified wave displacement
+        // Simplified wave displacement using world coordinates
         float wave(vec2 pos, float amplitude, float frequency, float phase) {
             return amplitude * sin(dot(pos, vec2(cos(phase), sin(phase))) * frequency + time * waveSpeed);
         }
@@ -611,18 +614,23 @@ const EnhancedWaterShader = {
         void main() {
             vUv = uv;
             
-            // Calculate wave displacement
+            // Calculate world position first to get world-space UV
+            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+            vec2 worldPosXZ = worldPosition.xz + worldOffset.xz;
+            vWorldUV = worldPosXZ;
+            
+            // Calculate wave displacement using world coordinates
             vec3 pos = position;
             float displacement = 0.0;
             
-            // Multiple wave layers for realistic water movement
-            displacement += wave(pos.xz, 0.15, waveScale * 0.8, 0.0);
-            displacement += wave(pos.xz, 0.1, waveScale * 1.3, 1.2);
-            displacement += wave(pos.xz, 0.05, waveScale * 2.1, 2.4);
+            // Multiple wave layers for realistic water movement - using world coordinates
+            displacement += wave(worldPosXZ, 0.15, waveScale * 0.8, 0.0);
+            displacement += wave(worldPosXZ, 0.1, waveScale * 1.3, 1.2);
+            displacement += wave(worldPosXZ, 0.05, waveScale * 2.1, 2.4);
             
             pos.y += displacement;
             
-            vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
+            worldPosition = modelMatrix * vec4(pos, 1.0);
             vWorldPosition = worldPosition.xyz;
             vDepth = worldPosition.y;
             
@@ -630,12 +638,12 @@ const EnhancedWaterShader = {
             vViewPosition = -mvPosition.xyz;
             gl_Position = projectionMatrix * mvPosition;
             
-            // Calculate normal for lighting (approximate)
+            // Calculate normal for lighting using world coordinates
             float offset = 0.1;
-            float left = wave((pos.xz - vec2(offset, 0.0)), 0.15, waveScale * 0.8, 0.0);
-            float right = wave((pos.xz + vec2(offset, 0.0)), 0.15, waveScale * 0.8, 0.0);
-            float front = wave((pos.xz - vec2(0.0, offset)), 0.15, waveScale * 0.8, 0.0);
-            float back = wave((pos.xz + vec2(0.0, offset)), 0.15, waveScale * 0.8, 0.0);
+            float left = wave((worldPosXZ - vec2(offset, 0.0)), 0.15, waveScale * 0.8, 0.0);
+            float right = wave((worldPosXZ + vec2(offset, 0.0)), 0.15, waveScale * 0.8, 0.0);
+            float front = wave((worldPosXZ - vec2(0.0, offset)), 0.15, waveScale * 0.8, 0.0);
+            float back = wave((worldPosXZ + vec2(0.0, offset)), 0.15, waveScale * 0.8, 0.0);
             
             vec3 normal = normalize(vec3(left - right, 2.0 * offset, front - back));
             vWorldNormal = normalMatrix * normal;
@@ -665,6 +673,7 @@ const EnhancedWaterShader = {
         varying vec3 vWorldNormal;
         varying vec3 vViewPosition;
         varying float vDepth;
+        varying vec2 vWorldUV;
         
         // Simplified noise function
         float noise(vec2 p) {
@@ -674,8 +683,11 @@ const EnhancedWaterShader = {
         }
         
         void main() {
-            vec2 animUV1 = vUv * textureScale + time * waveSpeed * 0.03;
-            vec2 animUV2 = vUv * textureScale * 1.2 - time * waveSpeed * 0.02;
+            // Use world UV coordinates for texture animation to keep water stationary in world space
+            // Scale world coordinates to texture space
+            vec2 worldTexCoord = vWorldUV * 0.01; // Convert world units to texture space
+            vec2 animUV1 = worldTexCoord * textureScale + time * waveSpeed * 0.03;
+            vec2 animUV2 = worldTexCoord * textureScale * 1.2 - time * waveSpeed * 0.02;
             
             vec3 normal = normalize(vWorldNormal);
             vec3 viewDir = normalize(cameraPosCustom - vWorldPosition);
@@ -2754,7 +2766,8 @@ export class Scroll3dEngine {
                 waterTexture: { value: waterTexture },
                 hasTexture: { value: hasTexture ? 1.0 : 0.0 },
                 textureScale: { value: config.textureScale },
-                cameraPosCustom: { value: new Vector3() }
+                cameraPosCustom: { value: new Vector3() },
+                worldOffset: { value: new Vector3() }
             },
             vertexShader: EnhancedWaterShader.vertexShader,
             fragmentShader: EnhancedWaterShader.fragmentShader,
@@ -8261,6 +8274,11 @@ function handleInstanceRender(instance, t) {
         // Update camera position for enhanced effects (fresnel, etc.)
         if(uniforms.cameraPosCustom && instance.activeCamera) {
             uniforms.cameraPosCustom.value.copy(instance.activeCamera.position);
+        }
+        
+        // Update world offset so waves appear fixed in world space
+        if(uniforms.worldOffset) {
+            uniforms.worldOffset.value.copy(instance.waterPlane.position);
         }
     }
 
