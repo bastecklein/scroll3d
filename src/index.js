@@ -7249,20 +7249,40 @@ function normalizeSunPosition(instance) {
 
         let sizeOut = instance.radius;
 
-        if(instance.toyModeEnabled) {
-            sizeOut = Math.round(instance.radius * 1.5);
+        // In orthographic mode, the shadow camera needs to match the visible area
+        if(instance.activeCamera == instance.orthoCamera) {
+            // Match the orthographic camera's frustum calculation
+            const width  = instance.lastWidth;
+            const height = instance.lastHeight;
+            const aspect = width / height;
+            const scale = Math.max(instance.radius / 4, 1);
+            
+            // Add extra margin to ensure shadows aren't cut off at screen edges
+            const margin = 1.5;
+            const halfH = scale * margin;
+            const halfW = halfH * aspect;
+            
+            instance.directionalLight.shadow.camera.left = -halfW;
+            instance.directionalLight.shadow.camera.right = halfW;
+            instance.directionalLight.shadow.camera.top = halfH;
+            instance.directionalLight.shadow.camera.bottom = -halfH;
         } else {
-            // Increased from 0.75 to 1.2 to prevent shadow culling when zoomed in
-            sizeOut = Math.round(instance.radius * 1.2);
+            // Perspective mode shadow camera sizing
+            if(instance.toyModeEnabled) {
+                sizeOut = Math.round(instance.radius * 1.5);
+            } else {
+                // Increased from 0.75 to 1.2 to prevent shadow culling when zoomed in
+                sizeOut = Math.round(instance.radius * 1.2);
+            }
+
+            // Ensure minimum shadow camera size to prevent culling at high zoom levels
+            sizeOut = Math.max(sizeOut, 50);
+
+            instance.directionalLight.shadow.camera.left = -sizeOut;
+            instance.directionalLight.shadow.camera.right = sizeOut * instance.sizeOutMultiplier;
+            instance.directionalLight.shadow.camera.top = sizeOut * instance.sizeOutMultiplier;
+            instance.directionalLight.shadow.camera.bottom = -sizeOut;
         }
-
-        // Ensure minimum shadow camera size to prevent culling at high zoom levels
-        sizeOut = Math.max(sizeOut, 50);
-
-        instance.directionalLight.shadow.camera.left = -sizeOut;
-        instance.directionalLight.shadow.camera.right = sizeOut * instance.sizeOutMultiplier;
-        instance.directionalLight.shadow.camera.top = sizeOut * instance.sizeOutMultiplier;
-        instance.directionalLight.shadow.camera.bottom = -sizeOut;
 
         instance.centerObject.position.set(
             instance.centerPosition.x * 2,
