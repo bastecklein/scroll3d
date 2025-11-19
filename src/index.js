@@ -684,10 +684,10 @@ const EnhancedWaterShader = {
         
         void main() {
             // Use world UV coordinates for texture animation to keep water stationary in world space
-            // Scale world coordinates to texture space
-            vec2 worldTexCoord = vWorldUV * 0.01; // Convert world units to texture space
-            vec2 animUV1 = worldTexCoord * textureScale + time * waveSpeed * 0.03;
-            vec2 animUV2 = worldTexCoord * textureScale * 1.2 - time * waveSpeed * 0.02;
+            // vWorldUV is already in engine's doubled world space, so we scale down appropriately
+            vec2 worldTexCoord = vWorldUV * 0.5; // Account for engine's 2x coordinate scale
+            vec2 animUV1 = worldTexCoord * textureScale * 0.01 + time * waveSpeed * 0.03;
+            vec2 animUV2 = worldTexCoord * textureScale * 0.012 - time * waveSpeed * 0.02;
             
             vec3 normal = normalize(vWorldNormal);
             vec3 viewDir = normalize(cameraPosCustom - vWorldPosition);
