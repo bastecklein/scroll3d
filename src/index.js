@@ -686,8 +686,8 @@ const EnhancedWaterShader = {
         void main() {
             // Use world UV coordinates for texture animation
             // vWorldUV is in engine's doubled world space (everything * 2)
-            // Divide by 2 to get logical world coordinates, then apply texture scale
-            vec2 worldTexCoord = vWorldUV * 0.5 / (textureScale * 10.0);
+            // Scale appropriately: divide by 2 for engine coords, multiply by textureScale for tiling
+            vec2 worldTexCoord = vWorldUV * textureScale * 0.01;
             vec2 animUV1 = worldTexCoord + time * waveSpeed * 0.03;
             vec2 animUV2 = worldTexCoord * 1.2 - time * waveSpeed * 0.02;
             
