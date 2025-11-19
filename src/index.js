@@ -7270,6 +7270,11 @@ function normalizeSunPosition(instance) {
             instance.centerPosition.y * 2
         );
 
+        // Make the directional light target the current center position
+        // This ensures shadows follow the camera in orthographic mode
+        instance.directionalLight.target = instance.centerObject;
+        instance.directionalLight.target.updateMatrixWorld();
+
         instance.directionalLight.shadow.camera.updateProjectionMatrix();
 
         // Enhanced shadow map settings to reduce chunk seam artifacts
