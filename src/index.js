@@ -616,7 +616,8 @@ const EnhancedWaterShader = {
             
             // Calculate world position first to get world-space UV
             vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-            vec2 worldPosXZ = worldPosition.xz + worldOffset.xz;
+            // worldPosition.xz already includes the plane's position in world space
+            vec2 worldPosXZ = worldPosition.xz;
             vWorldUV = worldPosXZ;
             
             // Calculate wave displacement using world coordinates
@@ -683,11 +684,12 @@ const EnhancedWaterShader = {
         }
         
         void main() {
-            // Use world UV coordinates for texture animation to keep water stationary in world space
-            // vWorldUV is already in engine's doubled world space, so we scale down appropriately
-            vec2 worldTexCoord = vWorldUV * 0.5; // Account for engine's 2x coordinate scale
-            vec2 animUV1 = worldTexCoord * textureScale * 0.01 + time * waveSpeed * 0.03;
-            vec2 animUV2 = worldTexCoord * textureScale * 0.012 - time * waveSpeed * 0.02;
+            // Use world UV coordinates for texture animation
+            // vWorldUV is in engine's doubled world space (everything * 2)
+            // Divide by 2 to get logical world coordinates, then apply texture scale
+            vec2 worldTexCoord = vWorldUV * 0.5 / (textureScale * 10.0);
+            vec2 animUV1 = worldTexCoord + time * waveSpeed * 0.03;
+            vec2 animUV2 = worldTexCoord * 1.2 - time * waveSpeed * 0.02;
             
             vec3 normal = normalize(vWorldNormal);
             vec3 viewDir = normalize(cameraPosCustom - vWorldPosition);
