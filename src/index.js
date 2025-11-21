@@ -1968,18 +1968,28 @@ export class Scroll3dEngine {
     outlineObjects(objectIds, visColor, hidColor, useSize) {
         const instance = this;
 
-        if(instance.postprocessor && instance.postprocessor.outlinePass) {
-            instance.postprocessor.outlinePass.selectedObjects = [];
+        if(instance.postprocessor && instance.postprocessor.outline) {
+            instance.postprocessor.outline.selectedObjects = [];
 
-            for(let i = 0; i < objectIds.length; i++) {
-                const object = instance.objects[objectIds[i]];
-                
-                if(object) {
-                    instance.postprocessor.outlinePass.selectedObjects.push(object.object);
+            if(objectIds) {
+                instance.postprocessor.outline.visibleEdgeColor.set(visColor);
+                instance.postprocessor.outline.hiddenEdgeColor.set(hidColor);
+                instance.postprocessor.outline.pulsePeriod = Number(5);
+                instance.postprocessor.outline.edgeStrength = Number(5);
+                instance.postprocessor.outline.edgeGlow = Number(1);
+                instance.postprocessor.outline.edgeThickness = Number(1.5);
+
+                for(let i = 0; i < objectIds.length; i++) {
+                    const object = instance.objects[objectIds[i]];
+                    
+                    if(object) {
+                        instance.postprocessor.outline.selectedObjects.push(object.object);
+                    }
                 }
-            }
 
-            return;
+                return;
+            }
+            
         }
 
         instance.circleUnderObjects(objectIds,visColor,useSize);
