@@ -4032,26 +4032,41 @@ function onPadDown(id, btn) {
             
         if(instance.padControlMethod == "standard") {
             if(button == "a" || button == "rt") {
-                const x = instance.lastWidth / 2;
-                const y = instance.lastHeight / 2;
+                if(instance.clickFunction) {
+                    const x = instance.lastWidth / 2;
+                    const y = instance.lastHeight / 2;
 
-                const hitPosition = actualLocationToVirtual(instance, x, y);
+                    const hitPosition = actualLocationToVirtual(instance, x, y);
 
-                if(hitPosition) {
-                    if(instance.clickFunction) {
-    
-                        if(hitPosition.z < 0) {
-                            hitPosition.z = 0;
-                        }
-    
-                        instance.clickFunction(
-                            buildInteractionResult(instance, {
-                                down: false
-                            }, hitPosition, x, y, "gamepad")
-                        );
-    
-                        
+                    if(hitPosition.z < 0) {
+                        hitPosition.z = 0;
                     }
+
+                    instance.clickFunction(
+                        buildInteractionResult(instance, {
+                            down: false
+                        }, hitPosition, x, y, "gamepad")
+                    );
+                }
+                
+            }
+
+            if(button == "lt") {
+                if(instance.rightClickFunction) {
+                    const x = instance.lastWidth / 2;
+                    const y = instance.lastHeight / 2;
+
+                    const hitPosition = actualLocationToVirtual(instance, x, y);
+
+                    if(hitPosition.z < 0) {
+                        hitPosition.z = 0;
+                    }
+
+                    instance.rightClickFunction(
+                        buildInteractionResult(instance, {
+                            down: false
+                        }, hitPosition, x, y, "gamepad")
+                    );
                 }
             }
         }
