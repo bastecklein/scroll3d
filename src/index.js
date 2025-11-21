@@ -1643,6 +1643,7 @@ export class Scroll3dEngine {
             this.vrCamHolder.add(this.activeCamera);
         }
 
+        initPostProcessor(this);
         setCameraPosition(this);
     }
 
