@@ -84,6 +84,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { BokehPass } from "three/examples/jsm/postprocessing/BokehPass.js";
 import { FilmPass } from "three/examples/jsm/postprocessing/FilmPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass.js";
 import { GammaCorrectionShader } from "three/addons/shaders/GammaCorrectionShader.js";
 
 import { VPPLoader } from "vpploader";
@@ -1966,6 +1967,21 @@ export class Scroll3dEngine {
 
     outlineObjects(objectIds, visColor, hidColor, useSize) {
         const instance = this;
+
+        if(instance.postprocessor && instance.postprocessor.outlinePass) {
+            instance.postprocessor.outlinePass.selectedObjects = [];
+
+            for(let i = 0; i < objectIds.length; i++) {
+                const object = instance.objects[objectIds[i]];
+                
+                if(object) {
+                    instance.postprocessor.outlinePass.selectedObjects.push(object.object);
+                }
+            }
+
+            return;
+        }
+
         instance.circleUnderObjects(objectIds,visColor,useSize);
     }
 
@@ -6803,6 +6819,8 @@ function initPostProcessor(instance) {
     const composer = new EffectComposer(instance.renderer);
     instance.postprocessor.composer = composer;
 
+    
+
     instance.postprocessor.render = new RenderPass(instance.scene, instance.activeCamera);
     composer.addPass(instance.postprocessor.render);
 
@@ -6841,6 +6859,10 @@ function initPostProcessor(instance) {
             composer.addPass(instance.postprocessor.bokeh);
         }
     }
+
+    const outlinePass = new OutlinePass(new Vector2(instance.lastWidth, instance.lastHeight), instance.scene, instance.activeCamera);
+    instance.postprocessor.outline = outlinePass;
+    composer.addPass(instance.postprocessor.outline);
 
     if(instance.filmMode) {
         instance.postprocessor.film = new FilmPass(0.10, 0.0, 0, instance.filmModeBW);
