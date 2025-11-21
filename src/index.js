@@ -2019,7 +2019,7 @@ export class Scroll3dEngine {
 
             let offset = 0;
 
-            if(size > 1) {
+            if(size > 1 && object.type != "bm") {
                 offset = (size - 1) / 2;
             }
 
@@ -6824,16 +6824,15 @@ function initPostProcessor(instance) {
         return;
     }
 
+    /*
     if(!instance.filmMode && !instance.useDOFEffect) {
         return;
-    }
+    }*/
 
     instance.postprocessor = {};
 
     const composer = new EffectComposer(instance.renderer);
     instance.postprocessor.composer = composer;
-
-    
 
     instance.postprocessor.render = new RenderPass(instance.scene, instance.activeCamera);
     composer.addPass(instance.postprocessor.render);
