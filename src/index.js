@@ -2000,6 +2000,10 @@ export class Scroll3dEngine {
 
         clearAutoCircleObjects(instance);
 
+        if(!objectIds) {
+            return;
+        }
+
         for(let i = 0; i < objectIds.length; i++) {
             const object = instance.objects[objectIds[i]];
 
