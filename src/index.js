@@ -1291,12 +1291,8 @@ export class Scroll3dEngine {
             return;
         }
 
-        let didMove = false;
+        let didChange = false;
 
-        if(options.x != undefined) {
-            object.x = options.x;
-            didMove = true;
-        }
 
         if(options.notHittable != undefined && object.mesh) {
 
@@ -1308,36 +1304,38 @@ export class Scroll3dEngine {
                 addObjToHittest(instance, object, 0);
             }
             
+            didChange = false;
         }
 
-        if(options.x != undefined) {
+        if(options.x != undefined && options.x != object.x) {
             object.x = options.x;
-            didMove = true;
+            didChange = true;
         }
 
-        if(options.y != undefined) {
+        if(options.y != undefined && options.y != object.y) {
             object.y = options.y;
-            didMove = true;
+            didChange = true;
         }
 
-        if(options.z != undefined) {
+        if(options.z != undefined && options.z != object.z) {
             object.z = options.z;
-            didMove = true;
+            didChange = true;
         }
 
-        if(options.rot != undefined) {
+        if(options.rot != undefined && options.rot != object.rot) {
             object.rot = options.rot;
-            didMove = true;
+            didChange = true;
         }
 
-        if(options.animation != undefined) {
+        if(options.animation != undefined && options.animation != object.animation) {
             object.animation = options.animation;
+            didChange = true;
         }
 
         if(object.type == "bar") {
             let change = false;
 
-            if(options.progress != null && options.progress != undefined) {
+            if(options.progress != null && options.progress != undefined ) {
                 let progress = options.progress;
 
                 if(progress > 0 && progress < 1) {
@@ -1385,8 +1383,9 @@ export class Scroll3dEngine {
         }
 
         if(options.positions) {
+            // might need to check this one for changes better at some point
             if(object.type == "instancecube") {
-                didMove = true;
+                didChange = true;
                 object.instancePositions = options.positions;
             }
         }
@@ -1402,6 +1401,8 @@ export class Scroll3dEngine {
                     // so it does not change the opacity of everything
                     object.mesh.material.opacity = object.opacity;
                 }
+
+                didChange = true;
                 
             }
         }
@@ -1419,6 +1420,7 @@ export class Scroll3dEngine {
 
                 }
                 
+                didChange = true;
             }
         }
 
@@ -1430,7 +1432,7 @@ export class Scroll3dEngine {
             }
         }
 
-        if(didMove) {
+        if(didChange) {
 
             if(object.hasCircle) {
                 const cirOb = instance.objects[object.hasCircle];
