@@ -8846,6 +8846,10 @@ function stepParticleSystem(system,timeElapsed) {
  */
 function doPostProcessing(instance) {
 
+    if(!instance.renderer) {
+        return;
+    }
+
     instance.renderer.clear();
     instance.activeCamera.layers.set(0);
 
@@ -8857,32 +8861,17 @@ function doPostProcessing(instance) {
             rendered = true;
         }
     
-        if(!rendered && instance.postprocessor) {
-            if(instance.postprocessor.composer) {
-                instance.postprocessor.composer.render(0.1);
-                rendered = true;
-            }
+        if(!rendered && instance.postprocessor && instance.postprocessor.composer) {
+            instance.postprocessor.composer.render();
+            rendered = true;
         }
     }
         
-
-    if(rendered) {
-        if(instance.currentHudCanvas) {
-            instance.renderer.clearDepth();
-            instance.activeCamera.layers.set(1);
-            instance.renderer.render(instance.scene, instance.activeCamera);
-        }
-        
-    } else {
+    if(!rendered) {
         instance.renderer.render(instance.scene, instance.activeCamera);
-
-        if(instance.currentHudCanvas) {
-            instance.renderer.clearDepth();
-            instance.activeCamera.layers.set(1);
-            instance.renderer.render(instance.scene, instance.activeCamera);
-        }
     }
-        
+    
+    renderHUDCanvas(instance);
 
     if(instance.waterPlane) {
 
@@ -8892,8 +8881,15 @@ function doPostProcessing(instance) {
 
         instance.waterPlane.material.uniforms.time.value += globalClock.getDelta();
     }
+}
 
-    instance.activeCamera.layers.set(0);
+function renderHUDCanvas(instance) {
+    if(instance.currentHudCanvas) {
+        instance.renderer.clearDepth();
+        instance.activeCamera.layers.set(1);
+        instance.renderer.render(instance.scene, instance.activeCamera);
+        instance.activeCamera.layers.set(0);
+    }
 }
 
 function conductPan(instance, x, y) {
