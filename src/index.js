@@ -2534,6 +2534,25 @@ export class Scroll3dEngine {
         }
     }
 
+    /**
+     * Set sky properties including colors, sun settings, and fog density.
+     * @param {Object} options - Sky configuration options
+     * @example
+     * instance.setSky({
+     *   top: "#87CEEB", // Sky top color
+     *   bottom: "#FFFFFF", // Sky bottom color
+     *   noSky: false, // Disable sky rendering
+     *   fogDensity: 0.002, // Fog density
+     *   sun: {
+     *     color: "#FFFF00", // Sun color
+     *     brightness: 0.8, // Sun brightness
+     *     show: true, // Show sun
+     *     angle: 45, // Sun angle in degrees
+     *     yOffset: 10 // Sun vertical offset
+     *   },
+     *   noAutoBrightness: false // Disable automatic brightness adjustment
+     * });
+     */
     setSky(options) {
         clearLighting(this);
 
@@ -2561,6 +2580,10 @@ export class Scroll3dEngine {
 
         if(options.noSky != undefined) {
             this.noSky = options.noSky;
+        }
+
+        if(options.fogDensity != undefined) {
+            this.fogDensity = options.fogDensity;
         }
 
         if(options.sun) {
