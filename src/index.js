@@ -10040,7 +10040,11 @@ async function doWorkCanvasChunk(instance, data, callback) {
         });
 
     } else {
-        material = new MeshLambertMaterial({ map: diffuseTexture });
+        material = new MeshLambertMaterial({ 
+            map: diffuseTexture,
+            bumpMap: bmTexture,
+            bumpScale: 0.45
+        });
     }
     
 
