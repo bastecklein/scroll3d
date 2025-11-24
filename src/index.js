@@ -2637,6 +2637,77 @@ export class Scroll3dEngine {
         normalizeSunPosition(this);
     }
 
+    /**
+     * Fast version of setSunAngle optimized for per-frame updates (e.g., day/night cycles)
+     * Skips expensive shadow camera recalculations and only updates sun position/intensity
+     * Use this in animation loops for better performance
+     * @param {number} deg - Sun angle in degrees
+     */
+    setSunAngleFast(deg) {
+        if(this.sunAngle == deg) {
+            return;
+        }
+
+        this.sunAngle = deg;
+
+        // Fast path: only update position and intensity, skip shadow camera updates
+        if(this.directionalLight) {
+            let cpX = this.centerPosition.x;
+            let cpY = this.centerPosition.y;
+            let cpZ = this.centerPosition.z;
+
+            let pointRad = 700;
+
+            if(this.toyModeEnabled) {
+                cpY -= 14;
+                pointRad = 50;
+            } else {
+                cpY += this.sunYoffset;
+            }
+
+            let point = getPoint(cpX, cpZ, pointRad, degreesToRadians(this.sunAngle));
+
+            cpX = point[0];
+            cpZ = point[1];
+
+            cpX *= 2;
+            cpY *= 2;
+            cpZ *= 2;
+
+            this.directionalLight.position.set(cpX, cpZ, cpY);
+
+            if(this.sunSphere) {
+                this.sunSphere.position.set(cpX, cpZ, cpY);
+            }
+
+            // Update intensity based on sun angle
+            if(this.noAutoBrightness) {
+                if(this.hemiBrightness > 0) {
+                    this.directionalLight.castShadow = true;
+                    this.directionalLight.intensity = SUN_INTENSITY;
+                } else {
+                    this.directionalLight.intensity = 0;
+                    this.directionalLight.castShadow = false;
+                }
+            } else {
+                if(!this.skydome && this.stardome) {
+                    this.directionalLight.castShadow = true;
+                    this.directionalLight.intensity = SUN_INTENSITY;
+                } else {
+                    if(this.sunAngle < 0 || this.sunAngle >= 184) {
+                        this.directionalLight.castShadow = false;
+                        this.directionalLight.intensity = 0;
+                    } else {
+                        this.directionalLight.castShadow = true;
+                        this.directionalLight.intensity = SUN_INTENSITY;
+                    }
+                }
+            }
+        }
+
+        this.shouldRender = true;
+    }
+
     updateSun(options) {
         let readdNeeded = false;
 
