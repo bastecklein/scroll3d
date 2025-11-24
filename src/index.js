@@ -2336,7 +2336,7 @@ export class Scroll3dEngine {
     }
 
     setPostprocessorEnabled(enabled) {
-        this.postprocessingEnabled = enabled;
+        this.postprocessorEnabled = enabled;
         initPostProcessor(this);
     }
 
