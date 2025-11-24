@@ -984,6 +984,8 @@ export class Scroll3dEngine {
         this.curFPS = TARGET_FPS;
         this.lastFPS = [TARGET_FPS];
 
+        this.postprocessorEnabled = true;
+
         this.sunSphere = null;
         this.chunkMode = options.chunkMode || "legacy";
 
@@ -2331,6 +2333,11 @@ export class Scroll3dEngine {
 
         instance.scene.add(instance.grid);
         instance.hitTestObjects.push(instance.grid);
+    }
+
+    setPostprocessorEnabled(enabled) {
+        this.postprocessingEnabled = enabled;
+        initPostProcessor(this);
     }
 
     setAbsoluteSize(w, h) {
@@ -3730,7 +3737,7 @@ export class Scroll3dEngine {
         instance.waterTexture = null;
         instance.waterPlane = null;
         instance.effectAnaglyph = null;
-        instance.postprocessor = {};
+        instance.postprocessor = null;
 
         instance.holder.innerHTML = "";
     }
@@ -6846,14 +6853,9 @@ function initPostProcessor(instance) {
         
     instance.postprocessor = null;
 
-    if(!instance || !instance.renderer) {
+    if(!instance || !instance.renderer || !instance.postprocessorEnabled) {
         return;
     }
-
-    /*
-    if(!instance.filmMode && !instance.useDOFEffect) {
-        return;
-    }*/
 
     instance.postprocessor = {};
 
