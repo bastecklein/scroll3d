@@ -10,6 +10,11 @@
 import { guid, removeFromArray, hexToRGB, rgbToHex, hash, randomIntFromInterval, distBetweenPoints } from "common-helpers";
 import { handleInput } from "input-helper";
 import GPH from "gamepadhelper";
+
+import { VPPLoader } from "vpploader";
+//import { VPPLoader } from "./vpploaderdev.js";
+
+import { renderPPP } from "ppp-tools";
 import { BMLoader } from "bmloader";
 
 import {
@@ -87,8 +92,7 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass.js";
 import { GammaCorrectionShader } from "three/addons/shaders/GammaCorrectionShader.js";
 
-import { VPPLoader } from "vpploader";
-import { renderPPP } from "ppp-tools";
+
 
 
 export const DEF_PHI = 75;
@@ -4865,7 +4869,8 @@ function initVPPObject(obj) {
             scale: obj.instance.vppRatio,
             opacity: obj.opacity,
             useBasic: obj.basicMat,
-            useLights: false
+            useLights: false,
+            cacheKey: meshName + ".sc." + obj.instance.vppRatio
         };
 
         vppLoader.load(opts, function(mesh) {
