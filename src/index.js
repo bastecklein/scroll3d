@@ -1001,6 +1001,7 @@ export class Scroll3dEngine {
         this.usePerMaterialShadowBias = options.usePerMaterialShadowBias !== false; // Per-material bias for chunks
 
         this.dynamicLighting = true;
+        this.useVPPFakeLights = false;
 
         this.sizeOutMultiplier = DEF_SIZE_OUT_MULTIPLIER;
 
@@ -3078,6 +3079,16 @@ export class Scroll3dEngine {
         setInstanceSize(instance);
     }
 
+    setUseVPPFakeLighting(enabled) {
+        const instance = this;
+        instance.useVPPFakeLights = enabled;
+
+        for(let objid in instance.objects) {
+            const obj = instance.objects[objid];
+            initVPPLightsAndEmitters(obj);
+        }
+    }
+
     setUseDynamicLighting(enabled) {
         const instance = this;
 
@@ -5138,10 +5149,12 @@ function initSpriteObject(obj) {
     });
 }
 
+
 function initFakeLightObject(obj) {
 
     obj.radius = obj.radius * 2;
 
+    
     let geometry = null;
 
     if(commonSpriteGeos[obj.radius]) {
@@ -7685,27 +7698,95 @@ function initVPPLightsAndEmitters(worldObject) {
 
     const scale = worldObject.scale * worldObject.instance.vppRatio;
 
-    if(lights && lights.length > 0 && instance.dynamicLighting) {
+    if(lights && lights.length > 0 && (instance.dynamicLighting || instance.useVPPFakeLights)) {
 
         for(let i = 0; i < lights.length; i++) {
             const ld = lights[i];
 
-            const rad = (ld.r * scale) * 3.14;
+            if(instance.dynamicLighting) {
+                const rad = (ld.r * scale) * 3.14;
 
-            const light = new PointLight(ld.c, ld.i * 12, rad, 1);
+                const light = new PointLight(ld.c, ld.i * 12, rad, 1);
             
-            light.position.x = (ld.x * scale) - worldObject.width;
-            light.position.z = (ld.y * scale) - worldObject.height / 2;
-            light.position.y = (ld.z * scale);
+                light.position.x = (ld.x * scale) - worldObject.width;
+                light.position.z = (ld.y * scale) - worldObject.height / 2;
+                light.position.y = (ld.z * scale);
 
-            worldObject.object.add(light);
+                worldObject.object.add(light);
 
-            const lOb = {
-                def: ld,
-                pl: light
-            };
+                const lOb = {
+                    def: ld,
+                    pl: light
+                };
 
-            worldObject.lights.push(lOb);
+                worldObject.lights.push(lOb);
+            }
+
+            if(instance.useVPPFakeLights) {
+                const rad = (ld.r * scale) * 2;
+
+                let geometry = null;
+
+                if(commonSpriteGeos[rad]) {
+                    geometry = commonSpriteGeos[rad];
+                } else {
+                    geometry = new PlaneGeometry(rad, rad);
+                    commonSpriteGeos[rad] = geometry;
+                }
+
+                let blending = AdditiveBlending;
+
+                let tx = getRadialTexture(ld.c, "transparent");
+
+                if(ld.i > 1) {
+                    const mesh = new Group();
+
+                    for(let i = 0; i < ld.i; i++) {
+                        let spriteMaterial = new SpriteMaterial({
+                            map: tx, 
+                            blending: blending, 
+                            transparent: true
+                        });
+
+                        let spr = new Sprite(spriteMaterial);
+                        spr.scale.set(rad, rad, rad);
+                        spr.geometry.attributes.position.needsUpdate = true;
+                        mesh.add(spr);
+                    }
+
+
+                    worldObject.object.add(mesh);
+
+                    const lOb = {
+                        def: ld,
+                        pl: mesh
+                    };
+
+                    worldObject.lights.push(lOb);
+                } else {
+                    let spriteMaterial = new SpriteMaterial({
+                        map: tx, 
+                        blending: blending, 
+                        transparent: true
+                    });
+
+                    const sprite = new Sprite(spriteMaterial);
+                    sprite.scale.set(rad, rad, rad);
+                    sprite.geometry.attributes.position.needsUpdate = true;
+                    worldObject.object.add(sprite);
+
+                    const lOb = {
+                        def: ld,
+                        pl: sprite
+                    };
+
+                    worldObject.lights.push(lOb);
+                }
+
+                
+            }
+
+            
         }
     }
 
