@@ -7723,7 +7723,8 @@ function initVPPLightsAndEmitters(worldObject) {
             }
 
             if(instance.useVPPFakeLights) {
-                const rad = (ld.r * scale) * 2;
+                const rad = (ld.r * scale);
+                const intensity = Math.round(ld.i / 4);
 
                 let geometry = null;
 
@@ -7738,14 +7739,16 @@ function initVPPLightsAndEmitters(worldObject) {
 
                 let tx = getRadialTexture(ld.c, "transparent");
 
-                if(ld.i > 1) {
+                if(intensity > 1) {
                     const mesh = new Group();
 
-                    for(let i = 0; i < ld.i; i++) {
+                    for(let i = 0; i < intensity; i++) {
                         let spriteMaterial = new SpriteMaterial({
                             map: tx, 
                             blending: blending, 
-                            transparent: true
+                            transparent: true,
+                            depthWrite: false,
+                            depthTest: false
                         });
 
                         let spr = new Sprite(spriteMaterial);
@@ -7767,7 +7770,9 @@ function initVPPLightsAndEmitters(worldObject) {
                     let spriteMaterial = new SpriteMaterial({
                         map: tx, 
                         blending: blending, 
-                        transparent: true
+                        transparent: true,
+                        depthWrite: false,
+                        depthTest: false
                     });
 
                     const sprite = new Sprite(spriteMaterial);
