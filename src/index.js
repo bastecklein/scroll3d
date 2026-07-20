@@ -2336,7 +2336,12 @@ export class Scroll3dEngine {
         }
 
         instance.scene.add(instance.grid);
-        instance.hitTestObjects.push(instance.grid);
+
+        // GridHelper is a visual guide; keep it out of raycast hit testing by default
+        // so pointer/touch placement uses the underlying plane/chunk/cube surfaces.
+        if(options.hittable === true) {
+            instance.hitTestObjects.push(instance.grid);
+        }
     }
 
     setPostprocessorEnabled(enabled) {
