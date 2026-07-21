@@ -7702,15 +7702,18 @@ function initVPPLightsAndEmitters(worldObject) {
 
         for(let i = 0; i < lights.length; i++) {
             const ld = lights[i];
+            const lightX = (ld.x * scale) - worldObject.width;
+            const lightZ = (ld.y * scale) - worldObject.height / 2;
+            const lightY = (ld.z * scale);
 
             if(instance.dynamicLighting) {
                 const rad = (ld.r * scale) * 3.14;
 
                 const light = new PointLight(ld.c, ld.i * 12, rad, 1);
             
-                light.position.x = (ld.x * scale) - worldObject.width;
-                light.position.z = (ld.y * scale) - worldObject.height / 2;
-                light.position.y = (ld.z * scale);
+                light.position.x = lightX;
+                light.position.z = lightZ;
+                light.position.y = lightY;
 
                 worldObject.object.add(light);
 
@@ -7723,74 +7726,53 @@ function initVPPLightsAndEmitters(worldObject) {
             }
 
             if(instance.useVPPFakeLights) {
-                const rad = (ld.r * scale);
-                const intensity = Math.round(ld.i / 4);
+                const rad = Math.max(0.5, ld.r * scale);
+                const intensity = MathUtils.clamp(ld.i, 0.4, 8);
+                const rgb = hexToRGB(ld.c);
+                const transparentEdge = "rgba(" + rgb.r + ", " + rgb.g + ", " + rgb.b + ", 0)";
 
-                let geometry = null;
+                const coreTx = getRadialTexture(LightenDarkenColor(ld.c, 35), transparentEdge);
+                const haloTx = getRadialTexture(ld.c, transparentEdge);
 
-                if(commonSpriteGeos[rad]) {
-                    geometry = commonSpriteGeos[rad];
-                } else {
-                    geometry = new PlaneGeometry(rad, rad);
-                    commonSpriteGeos[rad] = geometry;
-                }
+                const fakeLight = new Group();
+                fakeLight.position.set(lightX, lightY, lightZ);
 
-                let blending = AdditiveBlending;
+                const layerConfigs = [
+                    { map: coreTx, scale: 0.7, opacity: 0.12 },
+                    { map: haloTx, scale: 1.35, opacity: 0.09 },
+                    { map: haloTx, scale: 2.1, opacity: 0.05 }
+                ];
 
-                let tx = getRadialTexture(ld.c, "transparent");
-
-                if(intensity > 1) {
-                    const mesh = new Group();
-
-                    for(let i = 0; i < intensity; i++) {
-                        let spriteMaterial = new SpriteMaterial({
-                            map: tx, 
-                            blending: blending, 
-                            transparent: true,
-                            opacity: 0.15,
-                            fog: false,
-                            depthWrite: false,
-                            depthTest: false
-                        });
-
-                        let spr = new Sprite(spriteMaterial);
-                        spr.scale.set(rad, rad, rad);
-                        spr.geometry.attributes.position.needsUpdate = true;
-                        mesh.add(spr);
-                    }
-
-
-                    worldObject.object.add(mesh);
-
-                    const lOb = {
-                        def: ld,
-                        pl: mesh
-                    };
-
-                    worldObject.lights.push(lOb);
-                } else {
-                    let spriteMaterial = new SpriteMaterial({
-                        map: tx, 
-                        blending: blending, 
+                for(let layer = 0; layer < layerConfigs.length; layer++) {
+                    const cfg = layerConfigs[layer];
+                    const spriteMaterial = new SpriteMaterial({
+                        map: cfg.map,
+                        blending: AdditiveBlending,
                         transparent: true,
-                        opacity: 0.15,
+                        opacity: MathUtils.clamp(cfg.opacity * intensity, 0.04, 0.45),
                         fog: false,
                         depthWrite: false,
-                        depthTest: false
+                        depthTest: true,
+                        alphaTest: 0.01,
+                        toneMapped: false
                     });
 
-                    const sprite = new Sprite(spriteMaterial);
-                    sprite.scale.set(rad, rad, rad);
-                    sprite.geometry.attributes.position.needsUpdate = true;
-                    worldObject.object.add(sprite);
-
-                    const lOb = {
-                        def: ld,
-                        pl: sprite
-                    };
-
-                    worldObject.lights.push(lOb);
+                    const spr = new Sprite(spriteMaterial);
+                    const layerSize = rad * cfg.scale;
+                    spr.scale.set(layerSize, layerSize, layerSize);
+                    spr.position.y = layer * 0.01;
+                    spr.renderOrder = 2;
+                    fakeLight.add(spr);
                 }
+
+                worldObject.object.add(fakeLight);
+
+                const lOb = {
+                    def: ld,
+                    pl: fakeLight
+                };
+
+                worldObject.lights.push(lOb);
 
                 
             }
