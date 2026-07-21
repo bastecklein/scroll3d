@@ -7747,8 +7747,7 @@ function initVPPLightsAndEmitters(worldObject) {
                             map: tx, 
                             blending: blending, 
                             transparent: true,
-                            depthWrite: false,
-                            depthTest: false
+                            opacity: 0.5
                         });
 
                         let spr = new Sprite(spriteMaterial);
@@ -7771,8 +7770,7 @@ function initVPPLightsAndEmitters(worldObject) {
                         map: tx, 
                         blending: blending, 
                         transparent: true,
-                        depthWrite: false,
-                        depthTest: false
+                        opacity: 0.5
                     });
 
                     const sprite = new Sprite(spriteMaterial);
