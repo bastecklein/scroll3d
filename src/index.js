@@ -11,8 +11,8 @@ import { guid, removeFromArray, hexToRGB, rgbToHex, hash, randomIntFromInterval,
 import { handleInput } from "input-helper";
 import GPH from "gamepadhelper";
 
-import { VPPLoader } from "vpploader";
-//import { VPPLoader } from "./vpploaderdev.js";
+//import { VPPLoader } from "vpploader";
+import { VPPLoader } from "./vpploaderdev.js";
 
 import { renderPPP } from "ppp-tools";
 import { BMLoader } from "bmloader";
@@ -822,7 +822,10 @@ let globalParticleRecycling = [];
 let curAtlasIndex = 0;
 let textureAtlas = {};
 let curAtlasTexture = null;
+let curAtlasRoughnessTexture = null;
+let curAtlasMetalnessTexture = null;
 let curAtlasMaterial = null;
+let curAtlasWaterMaterial = null;
 let globalSunGeo = null;
 let globalPlaneGeo = null;
 let globalClock = null;
@@ -921,6 +924,8 @@ export function setTextureSize(size) {
     curAtlasIndex = 0;
     textureAtlas = {};
     curAtlasTexture = null;
+    curAtlasRoughnessTexture = null;
+    curAtlasMetalnessTexture = null;
 
     resetAtlasTexture();
 }
@@ -1002,6 +1007,9 @@ export class Scroll3dEngine {
 
         this.dynamicLighting = true;
         this.useVPPFakeLights = false;
+        this.autoToggleVPPLightsWithSun = false;
+        this.autoVPPLightsAreOn = true;
+        this.nightOnlyObjectLightsAreOn = true;
 
         this.sizeOutMultiplier = DEF_SIZE_OUT_MULTIPLIER;
 
@@ -1339,6 +1347,18 @@ export class Scroll3dEngine {
             didChange = true;
         }
 
+        if(options.nightOnly != undefined) {
+            const nextNightOnly = options.nightOnly === true;
+
+            if(nextNightOnly != object.nightOnly) {
+                object.nightOnly = nextNightOnly;
+
+                if(object.type == "pointlight" || object.type == "fakelight") {
+                    applyNightOnlyLightObjectState(object);
+                }
+            }
+        }
+
         if(object.type == "bar") {
             let change = false;
 
@@ -1671,6 +1691,11 @@ export class Scroll3dEngine {
         const uvs = [];
         const indices = [];
 
+        const waterPositions = [];
+        const waterNormals = [];
+        const waterUvs = [];
+        const waterIndices = [];
+
         let defMidBleed = null;
         let hasWater = false;
 
@@ -1684,21 +1709,27 @@ export class Scroll3dEngine {
             texture: defTexture.top,
             noise: defTexture.noise,
             noiseSize: this.vppSize,
-            topBlendColor: null
+            topBlendColor: null,
+            roughness: defTexture.topRoughness,
+            metalness: defTexture.topMetalness
         }, data, this);
 
         const defMid = getTextureIndex({
             texture: defTexture.middle,
             noise: defTexture.noise,
             noiseSize: this.vppSize,
-            topBlendColor: defMidBleed
+            topBlendColor: defMidBleed,
+            roughness: defTexture.middleRoughness,
+            metalness: defTexture.middleMetalness
         }, data, this);
 
         const defBot = getTextureIndex({
             texture: defTexture.middle,
             noise: defTexture.noise,
             noiseSize: this.vppSize,
-            topBlendColor: null
+            topBlendColor: null,
+            roughness: defTexture.bottomRoughness,
+            metalness: defTexture.bottomMetalness
         }, data, this);
 
         if(defTop == -1 || defMid == -1 || defBot == -1) {
@@ -1720,7 +1751,28 @@ export class Scroll3dEngine {
                     continue;
                 }
 
-                const result = addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTexture, defMidBleed, positions, normals, uvs, indices, totalAtlasSize, waterColor, hasWater);
+                const result = addChunkObPart(instance, 
+                    obj, 
+                    data, 
+                    x, 
+                    z, 
+                    defTop, 
+                    defBot, 
+                    defMid, 
+                    defTexture, 
+                    defMidBleed, 
+                    positions, 
+                    normals, 
+                    uvs, 
+                    indices, 
+                    totalAtlasSize, 
+                    waterColor, 
+                    hasWater,
+                    waterPositions,
+                    waterNormals,
+                    waterUvs,
+                    waterIndices
+                );
 
                 if(!result) {
                     return;
@@ -1747,46 +1799,8 @@ export class Scroll3dEngine {
             instance.addChunk(data);
             return;
         } else {
-            const cellgeo = new BufferGeometry();
 
-            const positionNumComponents = 3;
-            const normalNumComponents = 3;
-            const uvNumComponents = 2;
-            
-            cellgeo.setAttribute(
-                "position",
-                new BufferAttribute(new Float32Array(positions), positionNumComponents));
-
-            cellgeo.setAttribute(
-                "normal",
-                new BufferAttribute(new Float32Array(normals), normalNumComponents));
-
-            cellgeo.setAttribute(
-                "uv",
-                new BufferAttribute(new Float32Array(uvs), uvNumComponents));
-
-            cellgeo.setIndex(indices);
-
-            cellgeo.scale(2, 2, 2);
-
-            cellgeo.normalsNeedUpdate = true;
-            cellgeo.computeVertexNormals();
-
-            const mesh = new Mesh(cellgeo, curAtlasMaterial);
-
-            const meshX = Math.round((data.x * instance.chunkSize) * 2);
-            const meshY = Math.round((data.y * instance.chunkSize) * 2);
-
-            mesh.position.set(meshX, 0, meshY);
-
-            mesh.receiveShadow = true;
-
-            if(data.castShadow != undefined) {
-                mesh.castShadow = data.castShadow;
-            } else {
-                mesh.castShadow = true;
-            }
-
+            const mesh = createLegacyChunkMesh(positions, normals, uvs, indices, data.x, data.y, instance.chunkSize, data.castShadow, curAtlasMaterial);
             const chunkId = data.x + ":" + data.y + ":" + rOrder;
 
             // Apply per-material shadow bias for chunks to fix seam artifacts
@@ -1795,6 +1809,27 @@ export class Scroll3dEngine {
             instance.removeChunk(data.x, data.y, rOrder, 500);
 
             instance.chunks[chunkId] = mesh;
+            mesh.renderOrder = 0;
+
+            
+
+            if(hasWater) {
+                const wMesh = createLegacyChunkMesh(waterPositions, waterNormals, waterUvs, waterIndices, data.x, data.y, instance.chunkSize, false, curAtlasWaterMaterial || curAtlasMaterial);
+
+                if(wMesh) {
+                    const chunkId = data.x + ":" + data.y + ":" + rOrder + "w";
+                    instance.chunks[chunkId] = wMesh;
+                    wMesh.renderOrder = 1;
+                    wMesh.receiveShadow = false;
+
+                    //wMesh.position.y = wMesh.position.y + 6
+
+                    instance.scene.add(wMesh);
+                    instance.hitTestObjects.push(wMesh);
+
+                    
+                }
+            }
 
             instance.scene.add(mesh);
             instance.hitTestObjects.push(mesh);
@@ -1821,20 +1856,32 @@ export class Scroll3dEngine {
         }
 
         const chunkDat = instance.chunks[chunkId];
+        const waterDat = instance.chunks[chunkId + "w"];
 
         if(chunkDat) {
             removeFromArray(instance.hitTestObjects, chunkDat);
         }
 
+        if(waterDat) {
+            removeFromArray(instance.hitTestObjects, waterDat);
+        }
+
         if(withDelay && !isNaN(withDelay) && withDelay > 0) {
             setTimeout(function() {
                 removeObjectFromThree(instance, chunkDat, true);
+                if(waterDat) {
+                    removeObjectFromThree(instance, waterDat, true);
+                }
             }, withDelay);
         } else {
             removeObjectFromThree(instance, chunkDat, true);
+            if(waterDat) {
+                removeObjectFromThree(instance, waterDat, true);
+            }
         }
 
         delete instance.chunks[chunkId];
+        delete instance.chunks[chunkId + "w"];
 
         setCameraPosition(instance);
     }
@@ -1976,6 +2023,15 @@ export class Scroll3dEngine {
     }
 
     outlineObjects(objectIds, visColor, hidColor, useSize) {
+
+        if(!objectIds) {
+            return;
+        }
+
+        if(!Array.isArray(objectIds)) {
+            objectIds = [objectIds];
+        }
+
         const instance = this;
 
         if(instance.postprocessor && instance.postprocessor.outline) {
@@ -3100,6 +3156,13 @@ export class Scroll3dEngine {
         }
     }
 
+    setAutoToggleVPPLightsWithSun(enabled) {
+        const instance = this;
+
+        instance.autoToggleVPPLightsWithSun = enabled;
+        syncAutoVPPLightState(instance, true);
+    }
+
     setRotationLock(lock) {
         this.rotationLock = lock;
     }
@@ -3862,6 +3925,7 @@ class WorldObject {
         this.absPos = options.absPos || false;
         this.shadow = options.shadow || false;
         this.flickers = options.flickers || false;
+        this.nightOnly = options.nightOnly === true;
 
         this.bmAnimationsRef = null;
 
@@ -4298,15 +4362,27 @@ function resetAtlasTexture() {
     let totalAtlasSize = curAtlasIndex * useTextureSize;
     
     let atlasCanvas = document.createElement("canvas");
+    let roughnessCanvas = document.createElement("canvas");
+    let metalnessCanvas = document.createElement("canvas");
 
     atlasCanvas.style.imageRendering = "pixelated";
+    roughnessCanvas.style.imageRendering = "pixelated";
+    metalnessCanvas.style.imageRendering = "pixelated";
 
     let atlasContext = atlasCanvas.getContext("2d");
+    let roughnessContext = roughnessCanvas.getContext("2d");
+    let metalnessContext = metalnessCanvas.getContext("2d");
 
     atlasContext.imageSmoothingEnabled = false;
+    roughnessContext.imageSmoothingEnabled = false;
+    metalnessContext.imageSmoothingEnabled = false;
 
     atlasCanvas.width = totalAtlasSize;
     atlasCanvas.height = useTextureSize;
+    roughnessCanvas.width = totalAtlasSize;
+    roughnessCanvas.height = useTextureSize;
+    metalnessCanvas.width = totalAtlasSize;
+    metalnessCanvas.height = useTextureSize;
 
     for(let prop in textureAtlas) {
         let texture = textureAtlas[prop];
@@ -4320,40 +4396,75 @@ function resetAtlasTexture() {
 
         atlasContext.drawImage(texture.canvas,texture.idx * useTextureSize, 0);
 
+        const drawX = texture.idx * useTextureSize;
+        const roughnessShade = Math.round(texture.roughness * 255);
+        const metalnessShade = Math.round(texture.metalness * 255);
+
+        roughnessContext.fillStyle = "rgb(" + roughnessShade + ", " + roughnessShade + ", " + roughnessShade + ")";
+        roughnessContext.fillRect(drawX, 0, useTextureSize, useTextureSize);
+
+        metalnessContext.fillStyle = "rgb(" + metalnessShade + ", " + metalnessShade + ", " + metalnessShade + ")";
+        metalnessContext.fillRect(drawX, 0, useTextureSize, useTextureSize);
+
         atlasContext.restore();
     }
 
     let data = atlasCanvas.toDataURL("image/png",1);
+    let roughnessData = roughnessCanvas.toDataURL("image/png",1);
+    let metalnessData = metalnessCanvas.toDataURL("image/png",1);
 
     curAtlasTexture = TEXTURE_LOADER.load(data);
     curAtlasTexture.magFilter = NearestFilter;
     curAtlasTexture.minFilter = NearestFilter;
     curAtlasTexture.colorSpace = USE_COLORSPACE;
 
+    curAtlasRoughnessTexture = TEXTURE_LOADER.load(roughnessData);
+    curAtlasRoughnessTexture.magFilter = NearestFilter;
+    curAtlasRoughnessTexture.minFilter = NearestFilter;
+
+    curAtlasMetalnessTexture = TEXTURE_LOADER.load(metalnessData);
+    curAtlasMetalnessTexture.magFilter = NearestFilter;
+    curAtlasMetalnessTexture.minFilter = NearestFilter;
+
     // just these options were working goodl for MC2, gotta figure
     // something otu
     let matOptions = {
         map: curAtlasTexture,
+        roughnessMap: curAtlasRoughnessTexture,
+        metalnessMap: curAtlasMetalnessTexture,
+        roughness: 1,
+        metalness: 0,
         dithering: false,
         premultipliedAlpha: false,
         wireframe: false,
         alphaTest: 0.1
     };
 
-    if(!useSimplifiedAtlas) {
-        matOptions.transparent = true;
+    if(useSimplifiedAtlas) {
+        matOptions.alphaTest = 0;
     }
+
+    matOptions.transparent = false;
     
     // Apply toy mode to atlas material
     if(globalToyModeEnabled) {
-        // Use Lambert material with enhanced brightness for atlas
+        // Keep a subtle glow for toy-mode chunk atlases.
         if(matOptions.map) {
             matOptions.emissive = new Color(0x111111); // Subtle glow
         }
-        curAtlasMaterial = new MeshLambertMaterial(matOptions);
+        curAtlasMaterial = new MeshStandardMaterial(matOptions);
     } else {
-        curAtlasMaterial = new MeshLambertMaterial(matOptions);
+        curAtlasMaterial = new MeshStandardMaterial(matOptions);
     }
+
+    const waterMatOptions = {
+        ...matOptions,
+        transparent: true,
+        depthWrite: false,
+        alphaTest: 0
+    };
+
+    curAtlasWaterMaterial = new MeshStandardMaterial(waterMatOptions);
 
     // might have to loop though all chunks and reapply the material, or all objects?!
 }
@@ -5202,6 +5313,8 @@ function initFakeLightObject(obj) {
         obj.mesh.geometry.attributes.position.needsUpdate = true;
         obj.object.add(obj.mesh);
     }
+
+    applyNightOnlyLightObjectState(obj);
 }
 
 function initPointLightObject(obj) {
@@ -5216,6 +5329,8 @@ function initPointLightObject(obj) {
     }
 
     obj.object.add(pl);
+
+    applyNightOnlyLightObjectState(obj);
 }
 
 function initCircleObject(obj) {
@@ -5689,7 +5804,7 @@ function removeObjectFromThree(instance, object, andDispose) {
                     obj.dispose();
                 }
 
-                if(obj.material && obj.material.dispose) {
+                if(obj.material && obj.material.dispose && !(obj.userData && obj.userData.preserveMaterial)) {
                     obj.material.dispose();
                 }
 
@@ -5708,7 +5823,7 @@ function removeObjectFromThree(instance, object, andDispose) {
         object.dispose();
     }
 
-    if(object.material && object.material.dispose) {
+    if(object.material && object.material.dispose && !(object.userData && object.userData.preserveMaterial)) {
         object.material.dispose();
     }
 
@@ -5730,6 +5845,9 @@ function getTextureIndex(options,chunkData,instance) {
     if(options.opacity == null || options.opacity == undefined) {
         options.opacity = 1;
     }
+
+    options.roughness = normalizeChunkMaterialValue(options.roughness, 1);
+    options.metalness = normalizeChunkMaterialValue(options.metalness, 0);
 
     if(!options.topBlendColor) {
         options.topBlendColor = null;
@@ -5782,6 +5900,8 @@ function getTextureIndex(options,chunkData,instance) {
     }
 
     refName += ".op" + options.opacity;
+    refName += ".rg" + options.roughness;
+    refName += ".mt" + options.metalness;
 
     if(options.speckles) {
 
@@ -5933,7 +6053,9 @@ function getTextureIndex(options,chunkData,instance) {
         idx: curAtlasIndex,
         canvas: null,
         loading: true,
-        opacity: options.opacity
+        opacity: options.opacity,
+        roughness: options.roughness,
+        metalness: options.metalness
     };
 
     curAtlasIndex++;
@@ -6268,12 +6390,35 @@ function getTextureIndex(options,chunkData,instance) {
     return -1;
 }
 
-function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTexture, defMidBleed, positions, normals, uvs, indices, totalAtlasSize, waterColor, hasWater) {
+function addChunkObPart(
+    instance, 
+    obj, 
+    data, 
+    x, 
+    z, 
+    defTop, 
+    defBot, 
+    defMid, 
+    defTexture, 
+    defMidBleed, 
+    positions, 
+    normals, 
+    uvs, 
+    indices, 
+    totalAtlasSize, 
+    waterColor, 
+    hasWater,
+    waterPositions,
+    waterNormals,
+    waterUvs,
+    waterIndices
+) {
     let floorZ = 0;
     let useTop = defTop;
     let useBottom = defBot;
     let useMid = defMid;
     let waterNeighbor = false;
+    let waterTop = null;
 
     if(!obj.isWater) {
         obj.isWater = false;
@@ -6283,13 +6428,15 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
         floorZ = obj.z;
     }
 
-    if(obj.middle) {
+    if(obj.middle || obj.middleRoughness != undefined || obj.middleMetalness != undefined) {
 
         useMid = getTextureIndex({
-            texture: obj.middle,
+            texture: obj.middle || defTexture.middle,
             noise: defTexture.noise,
             noiseSize: instance.vppSize,
-            topBlendColor: defMidBleed
+            topBlendColor: defMidBleed,
+            roughness: obj.middleRoughness != undefined ? obj.middleRoughness : defTexture.middleRoughness,
+            metalness: obj.middleMetalness != undefined ? obj.middleMetalness : defTexture.middleMetalness
         }, data, instance);
 
         if(useMid == -1) {
@@ -6302,13 +6449,15 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                 
     }
 
-    if(obj.bottom) {
+    if(obj.bottom || obj.bottomRoughness != undefined || obj.bottomMetalness != undefined) {
 
         useBottom = getTextureIndex({
-            texture: obj.bottom,
+            texture: obj.bottom || defTexture.middle,
             noise: defTexture.noise,
             noiseSize: instance.vppSize,
-            topBlendColor: null
+            topBlendColor: null,
+            roughness: obj.bottomRoughness != undefined ? obj.bottomRoughness : defTexture.bottomRoughness,
+            metalness: obj.bottomMetalness != undefined ? obj.bottomMetalness : defTexture.bottomMetalness
         },data,instance);
 
         if(useBottom == -1) {
@@ -6320,26 +6469,45 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
         }
     }
 
-    if(obj.top) {
+    if(obj.top || obj.topRoughness != undefined || obj.topMetalness != undefined) {
 
         let opacity = 1;
         let topNoise = defTexture.noise;
+        
 
         if(obj.isWater) {
-            opacity = instance.defaultWaterOpacity;
 
-            if(instance.waterTexture) {
-                topNoise = true;
-            } else {
-                topNoise = false;
+            floorZ = 0;
+
+            waterTop = getTextureIndex({
+                texture: obj.top,
+                noise: true,
+                noiseSize: instance.vppSize,
+                topBlendColor: null,
+                opacity: 0.7,
+                roughness: 0.5,
+                metalness: 0.0
+            },data,instance);
+
+            if(!waterTop) {
+                setTimeout(function() {
+                    instance.addChunk(data);
+                }, 200);
+            
+                return null;
             }
+
+            /*
+            opacity = instance.defaultWaterOpacity;
 
             useMid = getTextureIndex({
                 texture: "#000000",
                 noise: false,
                 noiseSize: instance.vppSize,
                 topBlendColor: null,
-                opacity: 0
+                opacity: 0,
+                roughness: obj.middleRoughness != undefined ? obj.middleRoughness : defTexture.middleRoughness,
+                metalness: obj.middleMetalness != undefined ? obj.middleMetalness : defTexture.middleMetalness
             },data,instance);
                     
             waterColor = obj.top;
@@ -6351,6 +6519,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
             
                 return null;
             }
+                */
         }
 
         let speckles = null;
@@ -6408,12 +6577,20 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
             topAlt = obj.topAlt;
         }
 
+        let topTx = obj.top || defTexture.top;
+
+        if(obj.isWater) {
+            topTx = obj.middle || defTexture.middle || topTx;
+        }
+
         useTop = getTextureIndex({
-            texture:obj.top,
+            texture: topTx,
             noise: useNoise,
             noiseSize: instance.vppSize,
             topBlendColor: null,
             opacity: opacity,
+            roughness: obj.topRoughness != undefined ? obj.topRoughness : defTexture.topRoughness,
+            metalness: obj.topMetalness != undefined ? obj.topMetalness : defTexture.topMetalness,
             speckles: speckles,
             roads: roads,
             noiseVariance: noiseVariance,
@@ -6434,6 +6611,59 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
         }
     }
 
+    if(waterTop && obj.isWater) {
+        hasWater = true;
+
+        for (const {dir, corners, uvRow, altcorners, slopes, smdepress} of TEXTURE_FACES) {
+            //const ux = x + dir[0];
+            //const uy = obj.z + dir[1];
+            //const uz = z + dir[2];
+
+            if(uvRow != 2) {
+                continue;
+            }
+
+            let ndx = waterPositions.length / 3;
+
+            for (const {pos, uv} of altcorners) {
+                waterPositions.push(pos[0] + x, pos[1] + obj.z, pos[2] + z);
+                waterNormals.push(...dir);
+
+                
+                
+
+                let tx = waterTop;
+                           
+                
+                /*
+                if(uvRow == 2) {
+                    tx = useTop;
+                }
+
+                if(uvRow == 1) {
+                    tx = useBottom;
+                }
+                    */
+                    
+
+                let textureRow = 0;
+
+                let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
+
+                let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
+
+                let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
+
+                waterUvs.push(uvx,uvy);
+            }
+
+            waterIndices.push(
+                ndx, ndx + 1, ndx + 2,
+                ndx + 2, ndx + 1, ndx + 3
+            );
+        }
+    }
+
     for(let y = 0; y < WORLD_HEIGHT; y++) {
         // there is ground here
         if(y <= floorZ) {
@@ -6443,6 +6673,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                 const uy = y + dir[1];
                 const uz = z + dir[2];
 
+                
                 const neighbor = getChunkTileNeighbor(
                     data.data,
                     ux,
@@ -6450,7 +6681,7 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                     uz,
                     obj.isDepressed
                 );
-
+                
                 let shouldSkip = false;
 
                 if(neighbor && neighbor != -1) {
@@ -6466,7 +6697,8 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
 
                     shouldSkip = true;
 
-                            
+                         
+                    
                     if(obj.isWater != neighbor.isWater) {
                         shouldSkip = false;
                     }
@@ -6482,19 +6714,23 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                     }
                 }
 
-                if(obj.isWater && instance.waterTexture) {
-                    hasWater = true;
-                }
-
                 if(waterNeighbor) {
                     shouldSkip = false;
                 }
+                    
+                if(obj.isWater) {
+                    hasWater = true;
 
+                    if(neighbor && neighbor.isWater) {
+                        shouldSkip = true;
+                    }
+                }
 
                 if(!shouldSkip) {
                     let ndx = positions.length / 3;
 
                     let usecor = corners;
+
 
                     if(obj.isWater && y == floorZ) {
                         usecor = altcorners;
@@ -6508,7 +6744,10 @@ function addChunkObPart(instance, obj, data, x, z, defTop, defBot, defMid, defTe
                         usecor = slopes[obj.slope];
                     }
 
-                    if(obj.isWater && instance.waterTexture) {
+                    let doWater = obj.isWater;
+                    //doWater = false;
+
+                    if(doWater) {
 
                         for (const {pos, uv} of corners) {
                             positions.push(pos[0] + x, (pos[1] + y) - 1, pos[2] + z);
@@ -7573,9 +7812,115 @@ function normalizeSunPosition(instance) {
             }
         }
 
+        syncNightOnlyObjectLightState(instance);
+        syncAutoVPPLightState(instance);
+
     }
 
     
+}
+
+function isSunDownForVPPLights(instance) {
+    if(!instance) {
+        return false;
+    }
+
+    return instance.sunAngle <= 0 || instance.sunAngle >= 180;
+}
+
+function shouldAutoToggleVPPLights(instance) {
+    if(!instance || !instance.autoToggleVPPLightsWithSun) {
+        return false;
+    }
+
+    // Only engage this optimization for scenes using a sun and night sky texture.
+    return instance.showSun && !!instance.starTexture;
+}
+
+function shouldRenderVPPLights(instance) {
+    if(!shouldAutoToggleVPPLights(instance)) {
+        return true;
+    }
+
+    return isSunDownForVPPLights(instance);
+}
+
+function shouldRenderNightOnlyObjectLights(instance) {
+    if(!instance) {
+        return true;
+    }
+
+    // Tie to the same sun + night sky setup, but do not require
+    // auto VPP light toggling to be enabled.
+    if(!instance.showSun || !instance.starTexture) {
+        return true;
+    }
+
+    return isSunDownForVPPLights(instance);
+}
+
+function syncAutoVPPLightState(instance, forceRefresh = false) {
+    if(!instance) {
+        return;
+    }
+
+    const lightsOn = shouldRenderVPPLights(instance);
+
+    if(!forceRefresh && instance.autoVPPLightsAreOn === lightsOn) {
+        return;
+    }
+
+    instance.autoVPPLightsAreOn = lightsOn;
+
+    syncNightOnlyObjectLightState(instance);
+
+    for(let objid in instance.objects) {
+        const obj = instance.objects[objid];
+        initVPPLightsAndEmitters(obj);
+    }
+}
+
+function applyNightOnlyLightObjectState(obj) {
+    if(!obj || obj.isDisposed || !obj.object) {
+        return;
+    }
+
+    if(obj.type != "pointlight" && obj.type != "fakelight") {
+        return;
+    }
+
+    if(!obj.nightOnly) {
+        obj.object.visible = true;
+        return;
+    }
+
+    obj.object.visible = shouldRenderNightOnlyObjectLights(obj.instance);
+}
+
+function syncNightOnlyObjectLightState(instance, forceRefresh = false) {
+    if(!instance) {
+        return;
+    }
+
+    const lightsOn = shouldRenderNightOnlyObjectLights(instance);
+
+    if(!forceRefresh && instance.nightOnlyObjectLightsAreOn === lightsOn) {
+        return;
+    }
+
+    instance.nightOnlyObjectLightsAreOn = lightsOn;
+
+    for(let objid in instance.objects) {
+        const obj = instance.objects[objid];
+
+        if(!obj || !obj.nightOnly) {
+            continue;
+        }
+
+        if(obj.type == "pointlight" || obj.type == "fakelight") {
+            applyNightOnlyLightObjectState(obj);
+        }
+    }
 }
 
 function normalizeWaterPosition(instance) {
@@ -7698,22 +8043,25 @@ function initVPPLightsAndEmitters(worldObject) {
 
     const scale = worldObject.scale * worldObject.instance.vppRatio;
 
-    if(lights && lights.length > 0 && (instance.dynamicLighting || instance.useVPPFakeLights)) {
+    const allowVPPLights = shouldRenderVPPLights(instance);
+
+    if(lights && lights.length > 0 && allowVPPLights && (instance.dynamicLighting || instance.useVPPFakeLights)) {
 
         for(let i = 0; i < lights.length; i++) {
             const ld = lights[i];
+
             const lightX = (ld.x * scale) - worldObject.width;
-            const lightZ = (ld.y * scale) - worldObject.height / 2;
-            const lightY = (ld.z * scale);
+            const lightZ = (ld.z * scale) - worldObject.width;
+            const lightY = (ld.y * scale);
 
             if(instance.dynamicLighting) {
                 const rad = (ld.r * scale) * 3.14;
 
                 const light = new PointLight(ld.c, ld.i * 12, rad, 1);
             
-                light.position.x = lightX;
-                light.position.z = lightZ;
-                light.position.y = lightY;
+                light.position.x = lightX + rad;
+                light.position.z = lightZ + rad;
+                light.position.y = lightY + rad;
 
                 worldObject.object.add(light);
 
@@ -7723,10 +8071,8 @@ function initVPPLightsAndEmitters(worldObject) {
                 };
 
                 worldObject.lights.push(lOb);
-            }
-
-            if(instance.useVPPFakeLights) {
-                const rad = Math.max(0.5, ld.r * scale);
+            } else {
+                const rad = Math.max(0.25, (ld.r / 8) * scale);
                 const intensity = MathUtils.clamp(ld.i, 0.4, 8);
                 const rgb = hexToRGB(ld.c);
                 const transparentEdge = "rgba(" + rgb.r + ", " + rgb.g + ", " + rgb.b + ", 0)";
@@ -8376,6 +8722,8 @@ function getChunkTileNeighbor(data, x, y, z, dep) {
         return -1;
     }
 
+    
+
     return tile;
 }
 
@@ -8398,6 +8746,24 @@ function setVRCameraTheta(instance) {
 
 function normalizeAperture(ap) {
     return ap * 0.001;
+}
+
+function normalizeChunkMaterialValue(value, defaultValue) {
+    if(value == null || value == undefined || isNaN(value)) {
+        return defaultValue;
+    }
+
+    const numeric = Number(value);
+
+    if(numeric < 0) {
+        return 0;
+    }
+
+    if(numeric > 1) {
+        return 1;
+    }
+
+    return numeric;
 }
 
 function initController(instance, index) {
@@ -8543,16 +8909,6 @@ function handleInstanceRender(instance, t) {
     for(let obid in instance.objects) {
         const ob = instance.objects[obid];
         updateObjectLoop(instance, ob, instance.curDelta);
-    }
-
-    for(let chunkId in instance.chunks) {
-        if(chunkId.endsWith("water")) {
-            const wMesh = instance.chunks[chunkId];
-            // Optimize water animation frequency on mobile
-            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-            const timeStep = isMobile ? (1.0 / 30.0) : (1.0 / 60.0); // Half frequency on mobile
-            wMesh.material.uniforms.time.value += timeStep;
-        }
     }
 
     // retry removals
@@ -10543,6 +10899,52 @@ function pollGamepads() {
     }
 
     GPH.forcePoll();
+}
+
+function createLegacyChunkMesh(positions, normals, uvs, indices, x, y, chunkSize, castShadow, materialOverride) {
+    const cellgeo = new BufferGeometry();
+
+    const positionNumComponents = 3;
+    const normalNumComponents = 3;
+    const uvNumComponents = 2;
+            
+    cellgeo.setAttribute(
+        "position",
+        new BufferAttribute(new Float32Array(positions), positionNumComponents));
+
+    cellgeo.setAttribute(
+        "normal",
+        new BufferAttribute(new Float32Array(normals), normalNumComponents));
+
+    cellgeo.setAttribute(
+        "uv",
+        new BufferAttribute(new Float32Array(uvs), uvNumComponents));
+
+    cellgeo.setIndex(indices);
+
+    cellgeo.scale(2, 2, 2);
+
+    cellgeo.normalsNeedUpdate = true;
+    cellgeo.computeVertexNormals();
+
+    const meshMaterial = materialOverride || curAtlasMaterial;
+    const mesh = new Mesh(cellgeo, meshMaterial);
+    mesh.userData.preserveMaterial = true;
+
+    const meshX = Math.round((x * chunkSize) * 2);
+    const meshY = Math.round((y * chunkSize) * 2);
+
+    mesh.position.set(meshX, 0, meshY);
+
+    mesh.receiveShadow = true;
+
+    if(castShadow != undefined) {
+        mesh.castShadow = castShadow;
+    } else {
+        mesh.castShadow = true;
+    }
+
+    return mesh;
 }
 
 export default {
