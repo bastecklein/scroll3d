@@ -11,8 +11,8 @@ import { guid, removeFromArray, hexToRGB, rgbToHex, hash, randomIntFromInterval,
 import { handleInput } from "input-helper";
 import GPH from "gamepadhelper";
 
-//import { VPPLoader } from "vpploader";
-import { VPPLoader } from "./vpploaderdev.js";
+import { VPPLoader } from "vpploader";
+//import { VPPLoader } from "./vpploaderdev.js";
 
 import { renderPPP } from "ppp-tools";
 import { BMLoader } from "bmloader";
