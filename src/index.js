@@ -5002,7 +5002,15 @@ function initVPPObject(obj) {
 
         vppLoader.load(opts, function(mesh) {
 
-            if(obj.isDisposed || !mesh) {
+            if(!mesh) {
+                return;
+            }
+
+            if(obj.blockInstancing && obj.isDisposed) {
+                return;
+            }
+
+            if(!obj.blockInstancing && obj.instance.vppInstances[meshName] !== instanceHolder) {
                 return;
             }
 
@@ -5077,12 +5085,14 @@ function initVPPObject(obj) {
 
             obj.instanceParentId = meshName;
 
-            instanceHolder.items.push(obj.id);
+            if(!obj.isDisposed && obj.instance.objects[obj.id] === obj) {
+                instanceHolder.items.push(obj.id);
+                initVPPLightsAndEmitters(obj);
+            }
+
             instanceHolder.loading = false;
             instanceHolder.changed = true;
             instanceHolder.rawMesh = mesh;
-
-            initVPPLightsAndEmitters(obj);
         });
     }
 }
