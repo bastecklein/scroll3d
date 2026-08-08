@@ -1162,6 +1162,8 @@ export class Scroll3dEngine {
         this.antialias = options.antialias || false;
         this.shadows = options.shadows || false;
 
+        this.filmStrength = options.filmStrength || 0.10;
+
         this.squaredUp = false;
 
         this.forceWidth = null;
@@ -3354,6 +3356,14 @@ export class Scroll3dEngine {
         const instance = this;
 
         instance.useDOFEffect = enabled;
+
+        initPostProcessor(instance);
+    }
+
+    setFilmModeStrength(strength) {
+        const instance = this;
+
+        instance.filmStrength = strength;
 
         initPostProcessor(instance);
     }
@@ -7249,7 +7259,7 @@ function initPostProcessor(instance) {
     composer.addPass(instance.postprocessor.outline);
 
     if(instance.filmMode) {
-        instance.postprocessor.film = new FilmPass(0.10, 0.0, 0, instance.filmModeBW);
+        instance.postprocessor.film = new FilmPass(instance.filmStrength || 0.10, instance.filmModeBW);
         composer.addPass(instance.postprocessor.film, 1);
     }
 
