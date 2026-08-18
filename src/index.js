@@ -899,6 +899,12 @@ export function getAllInstances() {
     return scrollInstances;
 }
 
+// the renderer uses this single loader instance for every in world model, so
+// engine settings must be applied to it and not to a private instance
+export function getVPPLoader() {
+    return vppLoader;
+}
+
 export function setUseSimplifiedAtlas(use) {
     useSimplifiedAtlas = use;
 }
@@ -1279,6 +1285,7 @@ export class Scroll3dEngine {
             obj.object.frustumCulled = true;
 
             // Mobile optimization: Enable more aggressive culling
+            /*
             const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
             if (isMobile) {
                 obj.object.frustumCulled = true;
@@ -1286,7 +1293,7 @@ export class Scroll3dEngine {
                 if (obj.object.renderOrder === undefined) {
                     obj.object.renderOrder = 0;
                 }
-            }
+            }*/
 
             instance.scene.add(obj.object);
 
@@ -1438,15 +1445,22 @@ export class Scroll3dEngine {
 
         if(options.opacity != undefined) {
             if(options.opacity != object.opacity) {
-                object.opacity = options.opacity;
 
                 if(object.type == "cube") {
+                    object.opacity = options.opacity;
                     object.mesh.material = getMaterial(object.color,object.opacity,options.texture,object.basicMat,object.emissive,object.metal,null);
-                } else {
-                    // this will need changed eventually
-                    // so it does not change the opacity of everything
+                } else if(object.type == "vppInstanceItem" || object.type == "loading") {
+                    // vpp models are batched into a shared InstancedMesh, so a single
+                    // instance can't have its own material opacity. Instead we pull it
+                    // out of the batch and render it as a one-off mesh sharing the same
+                    // (cached) geometry and a cached translucent material variant.
+                    setVPPObjectGhostOpacity(instance, object, options.opacity);
+                } else if(object.mesh && object.mesh.material) {
+                    object.opacity = options.opacity;
                     object.mesh.material.opacity = object.opacity;
-
+                    object.mesh.material.transparent = object.opacity < 1;
+                } else {
+                    object.opacity = options.opacity;
                 }
                 
                 didChange = true;
@@ -1577,6 +1591,11 @@ export class Scroll3dEngine {
                 hold.changed = true;
             }
         }
+
+        if(object.ghostMesh) {
+            instance.scene.remove(object.ghostMesh);
+            object.ghostMesh = null;
+        }
         
         delete instance.objects[id];
 
@@ -1663,6 +1682,8 @@ export class Scroll3dEngine {
      * @param {string} cam - The camera type to set ("perspective" or "ortho").
      */
     setActiveCamera(cam = "perspective") {
+        const prevCamera = this.activeCamera;
+
         if(cam == "ortho") {
             this.activeCamera = this.orthoCamera;
         } else {
@@ -1672,6 +1693,15 @@ export class Scroll3dEngine {
         if(this.vrCamHolder) {
             this.vrCamHolder.clear();
             this.vrCamHolder.add(this.activeCamera);
+        }
+
+        // The HUD overlay is a child of the active camera. If the active
+        // camera object itself changes, the HUD must be re-parented to the new
+        // camera or it gets stranded on a camera that is no longer in the scene.
+        if(this.currentHudCanvasMesh && prevCamera && this.activeCamera != prevCamera) {
+            prevCamera.remove(this.currentHudCanvasMesh);
+            this.activeCamera.add(this.currentHudCanvasMesh);
+            setHudCanvasPosition(this);
         }
 
         initPostProcessor(this);
@@ -2163,15 +2193,24 @@ export class Scroll3dEngine {
         if(vsOb) {
             chkOb = instance.objects[vsOb];
 
+            // VPP instance items share a single InstancedMesh that is held in
+            // `vppInstances` keyed by their meshName (instanceParentId), NOT in
+            // `objects`. Resolve the holder there so we can raycast against the
+            // real structure geometry.
             if(chkOb && chkOb.instanceParentId) {
-                chkOb = instance.objects[chkOb.instanceParentId];
+                chkOb = instance.vppInstances[chkOb.instanceParentId] || instance.objects[chkOb.instanceParentId];
             }
         }
 
         let checkAgainst = null;
 
         if(chkOb) {
-            checkAgainst = [chkOb.object];
+            // For an instanced VPP holder `.mesh` is the shared InstancedMesh;
+            // for plain objects `.mesh`/`.object` is the actual geometry. Use
+            // whichever exists so the cast can actually hit the structure.
+            const chkMesh = chkOb.mesh || chkOb.object;
+
+            checkAgainst = chkMesh ? [chkMesh] : [];
         } else {
             checkAgainst = [];
 
@@ -3983,6 +4022,10 @@ class WorldObject {
         this.hasCircle = null;
         this.circleFor = options.circleFor || null;
 
+        // standalone transparent mesh used to temporarily render this object
+        // outside of its InstancedMesh batch (e.g. hover ghosting)
+        this.ghostMesh = null;
+
         // for camera follow mode
         this.camGoal = new Object3D();
         this.cameraTarget = new Vector3();
@@ -4872,6 +4915,63 @@ function initBMObject(obj) {
         }
     });
 
+}
+
+/**
+ * Toggle a single instanced (or still-loading) VPP object between its normal
+ * InstancedMesh batch and a standalone translucent "ghost" mesh. This avoids
+ * spinning up a whole new InstancedMesh (and its ~250k instance capacity
+ * buffers) just to make one item semi-transparent, and does not allocate any
+ * new geometry - the ghost mesh reuses the same BufferGeometry and a cached,
+ * shared material clone from the VPP loader's material cache.
+ * @param {Scroll3D} instance
+ * @param {WorldObject} object
+ * @param {number} opacity
+ */
+function setVPPObjectGhostOpacity(instance, object, opacity) {
+    const hold = object.instanceParentId ? instance.vppInstances[object.instanceParentId] : null;
+
+    object.opacity = opacity;
+
+    if(opacity == 1) {
+        if(object.ghostMesh) {
+            instance.scene.remove(object.ghostMesh);
+            object.ghostMesh = null;
+        }
+
+        if(hold && hold.items.indexOf(object.id) == -1) {
+            hold.items.push(object.id);
+            hold.changed = true;
+        }
+
+        return;
+    }
+
+    if(hold && hold.items.indexOf(object.id) > -1) {
+        removeFromArray(hold.items, object.id);
+        hold.changed = true;
+    }
+
+    if(!hold || !hold.rawMesh) {
+        // model hasn't finished loading yet, nothing to ghost yet
+        return;
+    }
+
+    const ghostMaterial = vppLoader.getCachedMaterial(hold.rawMesh.material, opacity);
+
+    if(!object.ghostMesh) {
+        object.ghostMesh = new Mesh(hold.rawMesh.geometry, ghostMaterial);
+        object.ghostMesh.matrixAutoUpdate = false;
+        object.ghostMesh.castShadow = false;
+        object.ghostMesh.receiveShadow = false;
+
+        instance.scene.add(object.ghostMesh);
+    } else {
+        object.ghostMesh.material = ghostMaterial;
+    }
+
+    object.ghostMesh.matrix.copy(object.object.matrix);
+    object.ghostMesh.matrixWorldNeedsUpdate = true;
 }
 
 /**
@@ -5784,18 +5884,7 @@ function normalizeObjectPosition(obj) {
         if(obj.mesh.computeBoundingSphere) {
             obj.mesh.computeBoundingSphere();
         }
-        
 
-        // THIS MIGHT BE NEEDED FOR VOXEL PAINT, BUT WAS REALLY SLOWING 
-        // DOWN MC2.  CHECK ON NEXT VOXEL PAINT UPDATE!!!
-        if(obj.mesh.geometry && !obj.skipGeometryUpdates) {
-            // Only enable expensive geometry updates when explicitly needed
-            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-            if (!isMobile) {
-                //obj.mesh.geometry.computeVertexNormals();
-                //obj.mesh.geometry.attributes.position.needsUpdate = true;
-            }
-        }
     }
     
     if(obj && obj.object) {
@@ -9407,6 +9496,14 @@ function doPostProcessing(instance) {
     instance.renderer.clear();
     instance.activeCamera.layers.set(0);
 
+    // In non-VR the HUD is rendered in a dedicated second pass on layer 1 so
+    // it stays crisp above post-processing. In XR the extra pass can't target
+    // the headset framebuffer, so the HUD must be on the shared layer (0) and
+    // be drawn as part of the main XR render in both eyes.
+    if(instance.currentHudCanvasMesh) {
+        instance.currentHudCanvasMesh.layers.set(instance.vrSession ? 0 : 1);
+    }
+
     let rendered = false;
 
     if(!instance.vrSession) {
@@ -9439,10 +9536,12 @@ function doPostProcessing(instance) {
 
 function renderHUDCanvas(instance) {
     if(instance.currentHudCanvas) {
-        instance.renderer.clearDepth();
-        instance.activeCamera.layers.set(1);
-        instance.renderer.render(instance.scene, instance.activeCamera);
-        instance.activeCamera.layers.set(0);
+        if(!instance.vrSession) {
+            instance.renderer.clearDepth();
+            instance.activeCamera.layers.set(1);
+            instance.renderer.render(instance.scene, instance.activeCamera);
+            instance.activeCamera.layers.set(0);
+        }
     }
 }
 
@@ -9733,8 +9832,8 @@ function setupVPPInstanceObject(instance, instOb) {
     }
 
     // Optimize bounding sphere computation - only do it when necessary
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    if (!isMobile && instOb.mesh.computeBoundingSphere) {
+    //const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (instOb.mesh.computeBoundingSphere) {
         instOb.mesh.computeBoundingSphere();
     }
 
@@ -10970,6 +11069,7 @@ function createLegacyChunkMesh(positions, normals, uvs, indices, x, y, chunkSize
 export default {
     getInstance,
     getAllInstances,
+    getVPPLoader,
     getOffset,
     forceResize,
     setTextureSize,
