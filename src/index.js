@@ -15,7 +15,9 @@ import { VPPLoader } from "vpploader";
 //import { VPPLoader } from "./vpploaderdev.js";
 
 import { renderPPP } from "ppp-tools";
+
 import { BMLoader } from "bmloader";
+//import { BMLoader } from "./bmloaderdev.js";
 
 import {
     MeshPhongMaterial,
@@ -38,6 +40,7 @@ import {
     Euler,
     Float32BufferAttribute,
     FogExp2,
+    Frustum,
     GridHelper,
     Group,
     HemisphereLight,
@@ -70,6 +73,7 @@ import {
     Sprite,
     SpriteMaterial,
     SRGBColorSpace,
+    Sphere,
     SphereGeometry,
     Texture,
     TextureLoader,
@@ -3977,6 +3981,8 @@ class WorldObject {
         this.nightOnly = options.nightOnly === true;
 
         this.bmAnimationsRef = null;
+        this.bmAnimAccum = 0;
+        this.bmAnimPhase = undefined;
 
         let defNoHit = false;
 
@@ -8517,14 +8523,34 @@ function buildInteractionResult(instance, pointer, hitPosition, x, y, type) {
     };
 }
 
+// Model dimensions are identical for every spawn of the same model variant + scale,
+// so measure once instead of traversing the whole hierarchy on each spawn.
+const bmBoundsCache = new Map();
+
+// Parts smaller than this fraction of the model radius contribute nothing visible
+// to the shadow pass, so they are excluded from it.
+const BM_SHADOW_MIN_RATIO = 0.12;
+
 function finishInitMeshObject(worldObject) {
 
     worldObject.mesh.scale.set(worldObject.scale, worldObject.scale, worldObject.scale);
 
-    const box = new Box3().setFromObject(worldObject.mesh);
-    const size = new Vector3();
+    const boundsKey = (worldObject.mesh.bmDat && worldObject.mesh.bmDat.cacheKey)
+        ? worldObject.mesh.bmDat.cacheKey + ":" + worldObject.scale
+        : null;
 
-    box.getSize(size);
+    let size = boundsKey ? bmBoundsCache.get(boundsKey) : null;
+
+    if(!size) {
+        const box = new Box3().setFromObject(worldObject.mesh);
+
+        size = new Vector3();
+        box.getSize(size);
+
+        if(boundsKey) {
+            bmBoundsCache.set(boundsKey, size);
+        }
+    }
 
     worldObject.rawTallness = size.y;
 
@@ -8556,13 +8582,43 @@ function finishInitMeshObject(worldObject) {
     worldObject.mesh.castShadow = shouldCast;
     worldObject.mesh.receiveShadow = shouldReceive;
 
+    const cullSmallShadows = worldObject.subType == "bm";
+    const modelRadius = (size.length() / 2) / (worldObject.scale || 1);
+
     if(worldObject.mesh.children) {
         worldObject.mesh.traverse(function(child) {
-            child.castShadow = shouldCast;
-            child.receiveShadow = shouldReceive;
+
+            let partCasts = shouldCast;
+            let partReceives = shouldReceive;
+
+            if(cullSmallShadows) {
+                partCasts = false;
+                partReceives = false;
+
+                if(child.isMesh && child.geometry) {
+                    if(!child.geometry.boundingSphere) {
+                        child.geometry.computeBoundingSphere();
+                    }
+
+                    const sphere = child.geometry.boundingSphere;
+                    const partScale = Math.max(child.scale.x, child.scale.y, child.scale.z);
+                    const partRadius = sphere ? sphere.radius * partScale : modelRadius;
+
+                    partCasts = shouldCast && partRadius >= modelRadius * BM_SHADOW_MIN_RATIO;
+                    partReceives = shouldReceive && partRadius >= modelRadius * BM_SHADOW_MIN_RATIO;
+                }
+            }
+
+            child.castShadow = partCasts;
+            child.receiveShadow = partReceives;
 
             
             if(child.material && worldObject.instance.toyModeEnabled) {
+                if(child.material.userData && child.material.userData.__bmShared) {
+                    child.material = child.material.clone();
+                    child.material.userData.__bmShared = false;
+                }
+
                 child.material.emissive = new Color(0x111111); // Subtle glow
                 child.material.emissiveIntensity = 0.5; // Adjust intensity for better visibility
                 child.material.shininess = 400;
@@ -9014,6 +9070,8 @@ function handleInstanceRender(instance, t) {
             uniforms.worldOffset.value.copy(instance.waterPlane.position);
         }
     }
+
+    beginObjectUpdatePass(instance);
 
     for(let obid in instance.objects) {
         const ob = instance.objects[obid];
@@ -10947,6 +11005,71 @@ export function setChunkTextureAtlas(atlas) {
     tileTextures = {};
 }
 
+// Animation level of detail. Entities outside the camera frustum are frozen, and
+// on-screen ones step their animation less often the further away they are. Skipped
+// frames accumulate their delta so playback speed stays correct.
+const BM_ANIM_NEAR_RATIO = 0.5;     // fraction of chunkSize animated every frame
+const BM_ANIM_MID_RATIO = 1.0;      // fraction of chunkSize animated every 2nd frame
+const BM_ANIM_FAR_STRIDE = 3;       // beyond that, every 3rd frame
+
+const animFrustum = new Frustum();
+const animFrustumMatrix = new Matrix4();
+const animBoundsSphere = new Sphere();
+
+let animFrustumValid = false;
+let animFrameCounter = 0;
+
+/**
+ * Per-frame setup for the object update pass. Builds the camera frustum once so
+ * individual objects only pay for a sphere test.
+ */
+function beginObjectUpdatePass(instance) {
+    animFrameCounter++;
+    animFrustumValid = false;
+
+    const camera = instance.activeCamera;
+
+    if(!camera) {
+        return;
+    }
+
+    // In XR the real view frustum is the union of the eye cameras, so skip the test there
+    if(instance.renderer && instance.renderer.xr && instance.renderer.xr.isPresenting) {
+        return;
+    }
+
+    camera.updateMatrixWorld();
+    animFrustumMatrix.copy(camera.matrixWorld).invert().premultiply(camera.projectionMatrix);
+    animFrustum.setFromProjectionMatrix(animFrustumMatrix);
+
+    animFrustumValid = true;
+}
+
+function isObjectOnScreen(obj) {
+    if(!animFrustumValid || !obj.object) {
+        return true;
+    }
+
+    const extent = Math.max(obj.width || 1, obj.height || 1, obj.rawTallness || 1);
+
+    animBoundsSphere.center.copy(obj.object.position);
+    animBoundsSphere.radius = (extent + 1) * 2;
+
+    return animFrustum.intersectsSphere(animBoundsSphere);
+}
+
+function getAnimationStride(instance, dist) {
+    if(dist <= instance.chunkSize * BM_ANIM_NEAR_RATIO) {
+        return 1;
+    }
+
+    if(dist <= instance.chunkSize * BM_ANIM_MID_RATIO) {
+        return 2;
+    }
+
+    return BM_ANIM_FAR_STRIDE;
+}
+
 function updateObjectLoop(instance, obj, delta) {
 
     
@@ -10973,10 +11096,7 @@ function updateObjectLoop(instance, obj, delta) {
         let totalAnimations = obj.bmAnimationsRef;
 
         if(totalAnimations == undefined || totalAnimations == null) {
-            for(let a in obj.mesh.bmDat.animations) {
-                totalAnimations++;
-            }
-
+            totalAnimations = Object.keys(obj.mesh.bmDat.animations).length;
             obj.bmAnimationsRef = totalAnimations;
         }
         
@@ -10993,12 +11113,38 @@ function updateObjectLoop(instance, obj, delta) {
             }
 
             if(obj.mesh.animate) {
-                obj.mesh.animate(delta);
+                stepBMAnimation(instance, obj, delta, dist);
             }
         }
 
         
     }
+}
+
+function stepBMAnimation(instance, obj, delta, dist) {
+
+    if(!isObjectOnScreen(obj)) {
+        obj.bmAnimAccum = 0;
+        return;
+    }
+
+    obj.bmAnimAccum = (obj.bmAnimAccum || 0) + delta;
+
+    const stride = getAnimationStride(instance, dist);
+
+    if(stride > 1) {
+        if(obj.bmAnimPhase == undefined) {
+            // spreads updates across frames so far-away entities don't all step together
+            obj.bmAnimPhase = Math.floor(Math.random() * BM_ANIM_FAR_STRIDE);
+        }
+
+        if((animFrameCounter + obj.bmAnimPhase) % stride != 0) {
+            return;
+        }
+    }
+
+    obj.mesh.animate(obj.bmAnimAccum);
+    obj.bmAnimAccum = 0;
 }
 
 function onVisibilityChange() {
