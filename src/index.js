@@ -48,8 +48,6 @@ import {
     LinearFilter,
     Line,
     LineBasicMaterial,
-    LineDashedMaterial,
-    LineSegments,
     MathUtils,
     Matrix4,
     Mesh,
@@ -95,6 +93,10 @@ import { FilmPass } from "three/examples/jsm/postprocessing/FilmPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass.js";
 import { GammaCorrectionShader } from "three/addons/shaders/GammaCorrectionShader.js";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { objectGroup } from "three/src/nodes/core/UniformGroupNode.js";
 
 
 
@@ -132,6 +134,8 @@ const tempMatrix = new Matrix4();
 const TEXTURE_LOADER = new TextureLoader();
 const DEF_FOG_DENSITY = 0.0075;
 const DEF_WATER_OPACITY = 0.75;
+// number of box-blur passes applied to the fog-of-war alpha channel for soft edges
+const FOG_BLUR_PASSES = 1;
 const MAX_MOUSE_MOVE = 5;
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 300;
@@ -834,6 +838,16 @@ let globalSunGeo = null;
 let globalPlaneGeo = null;
 let globalClock = null;
 
+// while true, getTextureIndex() defers the (expensive) full atlas rebuild instead of
+// doing one per new texture entry - see addChunk()
+let atlasBatchingActive = false;
+let atlasRebuildPending = false;
+
+// resolves once the atlas material built by the most recent resetAtlasTexture() call has
+// fully decoded on the GPU - chunk swaps wait on this so the old chunk is never removed
+// before the new one is actually ready to render, avoiding any visible gap or overlap
+let curAtlasReadyPromise = Promise.resolve();
+
 let chkHoverVec = null;
 let chkHoverVexAlt = null;
 
@@ -1288,17 +1302,6 @@ export class Scroll3dEngine {
 
             obj.object.frustumCulled = true;
 
-            // Mobile optimization: Enable more aggressive culling
-            /*
-            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-            if (isMobile) {
-                obj.object.frustumCulled = true;
-                // Set smaller render order for better batching
-                if (obj.object.renderOrder === undefined) {
-                    obj.object.renderOrder = 0;
-                }
-            }*/
-
             instance.scene.add(obj.object);
 
             if(!obj.notHittable) {
@@ -1411,6 +1414,37 @@ export class Scroll3dEngine {
             
         }
 
+        // badge canvases are usually redrawn/replaced by the caller (game code owns
+        // the drawing), so just re-sync the texture/sprite scale instead of rebuilding
+        // the whole WorldObject
+        if(object.type == "badge") {
+            if(options.canvas != undefined && options.canvas != object.canvas) {
+                object.canvas = options.canvas;
+
+                object.mesh.material.map.dispose();
+                object.mesh.material.map = new Texture(object.canvas);
+                object.mesh.material.map.needsUpdate = true;
+                object.mesh.material.map.colorSpace = USE_COLORSPACE;
+                object.mesh.material.map.magFilter = LinearFilter;
+                object.mesh.material.map.minFilter = LinearFilter;
+
+                instance.shouldRender = true;
+            } else if(options.refresh && object.mesh.material.map) {
+                object.mesh.material.map.needsUpdate = true;
+                instance.shouldRender = true;
+            }
+
+            if(options.scale != undefined && options.scale != object.badgeScale) {
+                object.badgeScale = options.scale;
+                instance.shouldRender = true;
+            }
+
+            if(object.mesh && object.canvas) {
+                const aspect = object.canvas.width / object.canvas.height;
+                object.mesh.scale.set(object.badgeScale * aspect, object.badgeScale, 1);
+            }
+        }
+
         if(options.color != undefined) {
             if(options.color != object.color) {
                 object.color = options.color;
@@ -1477,6 +1511,11 @@ export class Scroll3dEngine {
                     object.mesh.material = spriteMaterial;
                 });
             }
+        }
+
+        if(options.tiles != undefined && object.type == "fogofwar") {
+            updateFogObjectTiles(object, options.tiles);
+            instance.shouldRender = true;
         }
 
         if(didChange) {
@@ -1779,46 +1818,69 @@ export class Scroll3dEngine {
 
         const totalAtlasSize = curAtlasIndex * useTextureSize;
 
-        for(let x = 0; x < data.data.length; x++) {
-            for(let z = 0; z < data.data.length; z++) {
-                const obj = data.data[x][z];
+        // optional halo: data.data can carry a border of neighboring-chunk tiles (used only for
+        // correct cross-chunk face culling) around the real haloSize x haloSize region - geometry
+        // is only ever emitted for the real (non-halo) tiles. Defaults to 0 for full backwards compat.
+        const haloOffset = data.haloOffset || 0;
+        const realTileCount = data.data.length - (haloOffset * 2);
 
-                if(!obj) {
-                    continue;
+        // batch atlas rebuilds for this whole chunk build into a single rebuild instead of
+        // one per new texture variant (a chunk can introduce dozens at once, e.g. road auto-tiling)
+        const wasAtlasBatching = atlasBatchingActive;
+        atlasBatchingActive = true;
+
+        try {
+            for(let x = haloOffset; x < haloOffset + realTileCount; x++) {
+                for(let z = haloOffset; z < haloOffset + realTileCount; z++) {
+                    const obj = data.data[x][z];
+
+                    if(!obj) {
+                        continue;
+                    }
+
+                    const result = addChunkObPart(instance, 
+                        obj, 
+                        data, 
+                        x, 
+                        z, 
+                        defTop, 
+                        defBot, 
+                        defMid, 
+                        defTexture, 
+                        defMidBleed, 
+                        positions, 
+                        normals, 
+                        uvs, 
+                        indices, 
+                        totalAtlasSize, 
+                        waterColor, 
+                        hasWater,
+                        waterPositions,
+                        waterNormals,
+                        waterUvs,
+                        waterIndices,
+                        haloOffset
+                    );
+
+                    if(!result) {
+                        return;
+                    }
+
+                    if(result.hasWater) {
+                        hasWater = true;
+                    }
+
+                    waterColor = result.waterColor;
                 }
+            }
+        } finally {
+            if(!wasAtlasBatching) {
+                atlasBatchingActive = false;
 
-                const result = addChunkObPart(instance, 
-                    obj, 
-                    data, 
-                    x, 
-                    z, 
-                    defTop, 
-                    defBot, 
-                    defMid, 
-                    defTexture, 
-                    defMidBleed, 
-                    positions, 
-                    normals, 
-                    uvs, 
-                    indices, 
-                    totalAtlasSize, 
-                    waterColor, 
-                    hasWater,
-                    waterPositions,
-                    waterNormals,
-                    waterUvs,
-                    waterIndices
-                );
-
-                if(!result) {
-                    return;
+                if(atlasRebuildPending) {
+                    atlasRebuildPending = false;
+                    resetAtlasTexture();
                 }
-
-                if(result.hasWater) {
-                    hasWater = true;
-                }
-
-                waterColor = result.waterColor;
             }
         }
 
@@ -1842,35 +1904,46 @@ export class Scroll3dEngine {
             // Apply per-material shadow bias for chunks to fix seam artifacts
             applyChunkShadowBias(mesh, instance);
 
-            instance.removeChunk(data.x, data.y, rOrder, 500);
+            // overlay chunks (roads, etc.) sit at the exact same height as the base terrain chunk, which
+            // z-fights unpredictably depending on scene draw order; nudge them up a hair and force them to
+            // draw after the base layer so they always win, instead of flickering/disappearing at random
+            if(rOrder != "0" && rOrder != 0) {
+                mesh.position.y += 0.002;
+                mesh.renderOrder = 1;
+            } else {
+                mesh.renderOrder = 0;
+            }
 
-            instance.chunks[chunkId] = mesh;
-            mesh.renderOrder = 0;
-
-            
+            let wMesh = null;
 
             if(hasWater) {
-                const wMesh = createLegacyChunkMesh(waterPositions, waterNormals, waterUvs, waterIndices, data.x, data.y, instance.chunkSize, false, curAtlasWaterMaterial || curAtlasMaterial);
+                wMesh = createLegacyChunkMesh(waterPositions, waterNormals, waterUvs, waterIndices, data.x, data.y, instance.chunkSize, false, curAtlasWaterMaterial || curAtlasMaterial);
+            }
+
+            // wait for this chunk's atlas texture to actually finish decoding before touching the
+            // scene at all, then remove the old chunk and add the new one in the same tick - this
+            // avoids ever having both, or neither, chunk present at once
+            const readyPromise = curAtlasReadyPromise;
+
+            readyPromise.then(function() {
+                instance.removeChunk(data.x, data.y, rOrder, 0);
+
+                instance.chunks[chunkId] = mesh;
+                instance.scene.add(mesh);
+                instance.hitTestObjects.push(mesh);
 
                 if(wMesh) {
-                    const chunkId = data.x + ":" + data.y + ":" + rOrder + "w";
-                    instance.chunks[chunkId] = wMesh;
+                    const waterChunkId = data.x + ":" + data.y + ":" + rOrder + "w";
+                    instance.chunks[waterChunkId] = wMesh;
                     wMesh.renderOrder = 1;
                     wMesh.receiveShadow = false;
 
-                    //wMesh.position.y = wMesh.position.y + 6
-
                     instance.scene.add(wMesh);
                     instance.hitTestObjects.push(wMesh);
-
-                    
                 }
-            }
 
-            instance.scene.add(mesh);
-            instance.hitTestObjects.push(mesh);
-
-            clearAllParticleSystems(instance);
+                clearAllParticleSystems(instance);
+            });
         }
 
         
@@ -1953,7 +2026,9 @@ export class Scroll3dEngine {
             notHittable: true,
             rawTiles: options.tilesArray,
             rawZ: options.z,
-            fillRef: options.fill
+            fillRef: options.fill,
+            outline: options.outline,
+            outlineWidth: options.outlineWidth
         });
     }
 
@@ -3986,7 +4061,7 @@ class WorldObject {
 
         let defNoHit = false;
 
-        if(this.type == "sprite" || this.type == "fakelight") {
+        if(this.type == "sprite" || this.type == "fakelight" || this.type == "badge" || this.type == "fogofwar") {
             defNoHit = true;
         }
 
@@ -3994,8 +4069,16 @@ class WorldObject {
         this.texture = options.texture || null;
         this.points = options.points || [];
         this.dashed = options.dashed || false;
+        this.outline = options.outline || null;
+        this.outlineWidth = options.outlineWidth || 0;
+        // opt-in overrides for objects that must always draw above/below the usual
+        // depth-sorted scene (e.g. a world-border line that must beat the fog overlay)
+        this.renderOrder = options.renderOrder;
+        this.depthTest = options.depthTest;
         this.text = options.text || null;
         this.bars = options.bars || [];
+        this.canvas = options.canvas || null;
+        this.badgeScale = options.scale || 1;
         this.shadows = options.shadows || true;
         this.shadow = options.shadow || false;
         this.radius = options.radius || 1;
@@ -4003,7 +4086,12 @@ class WorldObject {
         this.basicMat = options.basicMat || options.useBasic || false;
         this.useLights = options.useLights || true;
         this.scale = options.scale || 1;
-        this.isSymmetrical = options.isSymmetrical || true;
+        // NOTE: intentionally not "options.isSymmetrical || true" - that pattern always
+        // evaluates to true (even when isSymmetrical is explicitly false), so it silently
+        // ignored the option entirely. This preserves the old always-true default for
+        // every existing caller (none pass this option today) while finally letting a
+        // caller opt out with isSymmetrical:false.
+        this.isSymmetrical = options.isSymmetrical === false ? false : true;
         this.emissive = options.emissive || null;
         this.metal = options.metal || false;
         this.scene = options.scene || null;
@@ -4016,6 +4104,7 @@ class WorldObject {
         this.progress = options.progress || 0;
         this.barTexture = null;
         this.tiles = options.tiles || null;
+        this.exploredOpacity = options.exploredOpacity;
         this.file = options.file || null;
         this.rawTiles = options.rawTiles || null;
         this.fillRef = options.fillRef || null;
@@ -4472,16 +4561,24 @@ function resetAtlasTexture() {
     let roughnessData = roughnessCanvas.toDataURL("image/png",1);
     let metalnessData = metalnessCanvas.toDataURL("image/png",1);
 
-    curAtlasTexture = TEXTURE_LOADER.load(data);
+    let resolveMainReady, resolveRoughReady, resolveMetalReady;
+
+    curAtlasReadyPromise = Promise.all([
+        new Promise((resolve) => { resolveMainReady = resolve; }),
+        new Promise((resolve) => { resolveRoughReady = resolve; }),
+        new Promise((resolve) => { resolveMetalReady = resolve; })
+    ]);
+
+    curAtlasTexture = TEXTURE_LOADER.load(data, resolveMainReady, undefined, resolveMainReady);
     curAtlasTexture.magFilter = NearestFilter;
     curAtlasTexture.minFilter = NearestFilter;
     curAtlasTexture.colorSpace = USE_COLORSPACE;
 
-    curAtlasRoughnessTexture = TEXTURE_LOADER.load(roughnessData);
+    curAtlasRoughnessTexture = TEXTURE_LOADER.load(roughnessData, resolveRoughReady, undefined, resolveRoughReady);
     curAtlasRoughnessTexture.magFilter = NearestFilter;
     curAtlasRoughnessTexture.minFilter = NearestFilter;
 
-    curAtlasMetalnessTexture = TEXTURE_LOADER.load(metalnessData);
+    curAtlasMetalnessTexture = TEXTURE_LOADER.load(metalnessData, resolveMetalReady, undefined, resolveMetalReady);
     curAtlasMetalnessTexture.magFilter = NearestFilter;
     curAtlasMetalnessTexture.minFilter = NearestFilter;
 
@@ -4574,6 +4671,16 @@ function setInstanceSize(instance) {
 
     instance.renderer.setPixelRatio(1);
     instance.renderer.setSize(renderWidth, renderHeight);
+
+    // keep real-width line materials (LineMaterial/Line2) in sync with the new
+    // drawing buffer size so border/line thickness stays correct after resize
+    for(let matKey in commonMaterials) {
+        const m = commonMaterials[matKey];
+
+        if(m && m.resolution) {
+            m.resolution.set(renderWidth, renderHeight);
+        }
+    }
 
     instance.camera.aspect = renderWidth / renderHeight;
     instance.camera.updateProjectionMatrix();
@@ -4759,6 +4866,10 @@ function initWorldObject(obj) {
         initTextObject(obj);
     }
 
+    if(obj.type == "badge") {
+        initBadgeObject(obj);
+    }
+
     if(obj.type == "sprite") {
         initSpriteObject(obj);
         return;
@@ -4822,37 +4933,38 @@ function initBarObject(obj) {
 }
 
 function initFogObject(obj) {
-    const color = new Color();
-    color.setHex(obj.color);
+    const color = new Color(obj.color);
 
     const r = Math.floor(color.r * 255);
     const g = Math.floor(color.g * 255);
     const b = Math.floor(color.b * 255);
 
+    const exploredAlpha = Math.round(255 * (obj.exploredOpacity != undefined ? obj.exploredOpacity : 0.6));
+
+    obj.fogColorRGB = { r: r, g: g, b: b };
+    obj.fogExploredAlpha = exploredAlpha;
+
     const size = obj.width * obj.height;
 
     const data = new Uint8Array( 4 * size );
 
-    for(let i = 0; i < obj.tiles.length; i++) {
-        const tile = obj.tiles[i];
-
-        const x = tile.x;
-        const y = tile.y;
-
-        const yPos = y * obj.width;
-        const pos = yPos + x;
-
-        const idx = pos * 4;
+    // default every tile to fully opaque (unexplored) fog, then carve out known tiles below
+    for(let i = 0; i < size; i++) {
+        const idx = i * 4;
 
         data[idx + 0] = r;
         data[idx + 1] = g;
         data[idx + 2] = b;
-
         data[idx + 3] = 255;
     }
 
+    applyFogTileStates(data, obj.width, obj.height, obj.tiles || [], exploredAlpha);
+    blurFogAlpha(data, obj.width, obj.height, FOG_BLUR_PASSES);
+
     const texture = new DataTexture(data, obj.width, obj.height);
     texture.needsUpdate = true;
+
+    texture.colorSpace = USE_COLORSPACE;
 
     texture.wrapS = ClampToEdgeWrapping;
     texture.wrapT = ClampToEdgeWrapping;
@@ -4869,11 +4981,107 @@ function initFogObject(obj) {
         side: DoubleSide, 
         transparent: true, 
         depthWrite: false,
+        depthTest: false,
         opacity: 1
     } );
 
     obj.mesh = new Mesh(geometry, material); 
+    obj.mesh.renderOrder = 3;
     obj.object.add(obj.mesh);
+}
+
+// tiles is an array of {x, y, visible}: visible tiles are fully cleared (alpha 0),
+// explored-but-not-visible tiles get exploredAlpha, anything absent stays as-is
+// (initFogObject pre-fills opaque, updateFogObjectTiles re-fills opaque each call)
+function applyFogTileStates(data, width, height, tiles, exploredAlpha) {
+    for(let i = 0; i < tiles.length; i++) {
+        const tile = tiles[i];
+
+        if(tile.x < 0 || tile.x >= width || tile.y < 0 || tile.y >= height) {
+            continue;
+        }
+
+        const idx = (tile.y * width + tile.x) * 4;
+
+        data[idx + 3] = tile.visible ? 0 : exploredAlpha;
+    }
+}
+
+// simple separable-ish box blur restricted to the alpha channel, softening the hard
+// tile-grid edges of the fog so explored/visible boundaries look like soft clouds
+function blurFogAlpha(data, width, height, passes) {
+    if(!passes || passes < 1) {
+        return;
+    }
+
+    const size = width * height;
+
+    for(let p = 0; p < passes; p++) {
+        const src = new Uint8ClampedArray(size);
+
+        for(let i = 0; i < size; i++) {
+            src[i] = data[i * 4 + 3];
+        }
+
+        for(let y = 0; y < height; y++) {
+            for(let x = 0; x < width; x++) {
+                let total = 0;
+                let count = 0;
+
+                for(let dy = -1; dy <= 1; dy++) {
+                    const ny = y + dy;
+
+                    if(ny < 0 || ny >= height) {
+                        continue;
+                    }
+
+                    for(let dx = -1; dx <= 1; dx++) {
+                        const nx = x + dx;
+
+                        if(nx < 0 || nx >= width) {
+                            continue;
+                        }
+
+                        total += src[ny * width + nx];
+                        count++;
+                    }
+                }
+
+                data[(y * width + x) * 4 + 3] = Math.round(total / count);
+            }
+        }
+    }
+}
+
+// live-refresh an existing fogofwar object's known tiles without rebuilding its mesh/geometry
+function updateFogObjectTiles(obj, tiles) {
+    if(!obj.mesh || !obj.mesh.material || !obj.mesh.material.map) {
+        return;
+    }
+
+    const texture = obj.mesh.material.map;
+    const data = texture.image.data;
+
+    const color = obj.fogColorRGB || { r: 0, g: 0, b: 0 };
+    const exploredAlpha = obj.fogExploredAlpha != undefined ? obj.fogExploredAlpha : 153;
+
+    const size = obj.width * obj.height;
+
+    for(let i = 0; i < size; i++) {
+        const idx = i * 4;
+
+        data[idx + 0] = color.r;
+        data[idx + 1] = color.g;
+        data[idx + 2] = color.b;
+        data[idx + 3] = 255;
+    }
+
+    obj.tiles = tiles || [];
+
+    applyFogTileStates(data, obj.width, obj.height, obj.tiles, exploredAlpha);
+    blurFogAlpha(data, obj.width, obj.height, FOG_BLUR_PASSES);
+
+    texture.needsUpdate = true;
 }
 
 /**
@@ -5277,12 +5485,48 @@ function initCubeObject(obj) {
 function initLineObject(obj) {
 
     if(obj.points.length > 0) {
-        const geometry = new BufferGeometry().setFromPoints(obj.points);
+        const instance = obj.instance;
+        const geometry = buildLineSegmentsGeometry(obj.points);
 
-        //LineSegments
-        obj.mesh = new LineSegments(geometry, getLineMaterial(obj.color, obj.width, obj.dashed));
+        const res = (instance && instance.lastWidth)
+            ? { x: instance.lastWidth, y: instance.lastHeight }
+            : { x: window.innerWidth, y: window.innerHeight };
+
+        const mat = getLineMaterial(obj.color, obj.width, obj.dashed, res, obj.outline ? "over" : null);
+
+        // track the material so its resolution can be kept in sync on resize
+        obj.lineMaterial = mat;
+
+        obj.mesh = new LineSegments2(geometry, mat);
         obj.mesh.computeLineDistances();
         obj.object.add(obj.mesh);
+
+        // optional outline: the same line drawn wider underneath in a second color.
+        // Same geometry means the same dash distances, so the outline hugs the line
+        // exactly and the dash gaps stay transparent instead of showing a solid bar
+        if(obj.outline) {
+            const outlineMat = getLineMaterial(obj.outline, obj.outlineWidth || (obj.width * 2), obj.dashed, res, "under");
+
+            obj.outlineMesh = new LineSegments2(geometry, outlineMat);
+            obj.outlineMesh.computeLineDistances();
+            obj.object.add(obj.outlineMesh);
+        }
+
+        if(obj.renderOrder != undefined) {
+            obj.mesh.renderOrder = obj.renderOrder;
+
+            if(obj.outlineMesh) {
+                obj.outlineMesh.renderOrder = obj.renderOrder;
+            }
+        }
+
+        if(obj.depthTest === false) {
+            obj.mesh.material.depthTest = false;
+
+            if(obj.outlineMesh) {
+                obj.outlineMesh.material.depthTest = false;
+            }
+        }
 
         const heartShape = new Shape();
 
@@ -5341,8 +5585,14 @@ function initLineObject(obj) {
             const vertices = new Float32Array(rawVert);
 
             rGeo.setAttribute("position", new BufferAttribute( vertices, 3  ));
-            const rMat = new MeshBasicMaterial( { color: obj.color, side: DoubleSide, transparent: true, opacity:  obj.fillRef } );
+
+            // depthWrite must stay off and renderOrder must sit above the terrain (0)
+            // and overlay (1) chunks - the fill hovers just over translucent water, and
+            // if the two transparent surfaces are left to sort themselves against each
+            // other, whichever loses the depth race vanishes where they overlap
+            const rMat = new MeshBasicMaterial( { color: obj.color, side: DoubleSide, transparent: true, opacity:  obj.fillRef, depthWrite: false } );
             const rmesh = new Mesh(rGeo, rMat );
+            rmesh.renderOrder = 2;
 
             obj.object.add(rmesh);
         }
@@ -5359,6 +5609,38 @@ function initTextObject(obj) {
     });
 
     obj.object.add(obj.mesh);
+}
+
+// Generic billboard sprite built from a caller-supplied canvas - lets the game
+// layer draw whatever custom label/badge content it wants without this engine
+// needing to know anything about it.
+function initBadgeObject(obj) {
+    obj.mesh = createBadgeSprite(obj.canvas, obj.badgeScale);
+    obj.object.add(obj.mesh);
+}
+
+function createBadgeSprite(canvas, scale) {
+    const texture = new Texture(canvas);
+    texture.needsUpdate = true;
+    texture.colorSpace = USE_COLORSPACE;
+
+    texture.magFilter = LinearFilter;
+    texture.minFilter = LinearFilter;
+
+    const spriteMaterial = new SpriteMaterial({
+        map: texture,
+        depthWrite: false,
+        depthTest: false,
+        transparent: true
+    });
+
+    const sprite = new Sprite(spriteMaterial);
+    const aspect = canvas.width / canvas.height;
+
+    sprite.scale.set(scale * aspect, scale, 1);
+    sprite.renderOrder = 999;
+
+    return sprite;
 }
 
 function initSpriteObject(obj) {
@@ -5771,7 +6053,7 @@ function normalizeObjectPosition(obj) {
         obj.object.position.set((obj.x * 2) + 1, useZ, (obj.y * 2) + 1);
     }
 
-    if(obj.type == "circle" || obj.type == "fakelight" || obj.type == "text" || obj.type == "sprite" || obj.type == "bar") {
+    if(obj.type == "circle" || obj.type == "fakelight" || obj.type == "text" || obj.type == "sprite" || obj.type == "bar" || obj.type == "badge") {
 
         let useZ = (obj.z * 2) + 1;
 
@@ -5788,9 +6070,22 @@ function normalizeObjectPosition(obj) {
         let y = (obj.y * 2 + (obj.height));
         let z = (obj.z * 2);
 
-        if(!obj.isSymmetrical) {
+        // matches the instanced VPP batch path's x/y centering (ceil of tile pos +
+        // half the model's actual width/depth) - the generic !isSymmetrical fallback
+        // below assumes a flat 1-tile-wide model and ignores centerInTile, which put a
+        // standalone (blockInstancing) vpp mesh off by up to a whole tile
+        if(obj.subType == "vpp" && obj.centerInTile && obj.scale == 1) {
+            x = Math.ceil(x);
+            y = Math.ceil(y);
+        } else if(!obj.isSymmetrical) {
             x = (obj.x + 0.5) * 2;
             y = (obj.y + 0.5) * 2;
+        }
+
+        // matches the instanced VPP batch path (tall = size.y / 2 added to z) - without
+        // this a standalone (blockInstancing) vpp mesh sits half its height too low
+        if(obj.subType == "vpp" && obj.rawTallness) {
+            z += obj.rawTallness / 2;
         }
 
         obj.object.position.set(x, z, y);
@@ -6481,7 +6776,7 @@ function getTextureIndex(options,chunkData,instance) {
         }
 
         textObj.loading = false;
-        resetAtlasTexture();
+        requestAtlasRebuild();
 
         return textureAtlas[refName].idx;
     }
@@ -6496,13 +6791,24 @@ function getTextureIndex(options,chunkData,instance) {
         }
 
         textObj.loading = false;
-        resetAtlasTexture();
+        requestAtlasRebuild();
     };
     img.src = options.texture;
 
-    resetAtlasTexture();
+    requestAtlasRebuild();
 
     return -1;
+}
+
+// rebuilds the shared atlas immediately, unless a chunk build is in progress (see addChunk()),
+// in which case it's deferred to a single rebuild once that chunk's whole tile loop is done
+function requestAtlasRebuild() {
+    if(atlasBatchingActive) {
+        atlasRebuildPending = true;
+        return;
+    }
+
+    resetAtlasTexture();
 }
 
 function addChunkObPart(
@@ -6526,14 +6832,19 @@ function addChunkObPart(
     waterPositions,
     waterNormals,
     waterUvs,
-    waterIndices
+    waterIndices,
+    haloOffset = 0
 ) {
     let floorZ = 0;
     let useTop = defTop;
     let useBottom = defBot;
     let useMid = defMid;
-    let waterNeighbor = false;
     let waterTop = null;
+
+    // halo tiles (present only for neighbor lookups across chunk borders) never get their own
+    // geometry - x/z stay raw for indexing data.data, these are the local in-chunk mesh coords
+    const renderX = x - haloOffset;
+    const renderZ = z - haloOffset;
 
     if(!obj.isWater) {
         obj.isWater = false;
@@ -6543,7 +6854,7 @@ function addChunkObPart(
         floorZ = obj.z;
     }
 
-    if(obj.middle || obj.middleRoughness != undefined || obj.middleMetalness != undefined) {
+    if(!data.topOnly && (obj.middle || obj.middleRoughness != undefined || obj.middleMetalness != undefined)) {
 
         useMid = getTextureIndex({
             texture: obj.middle || defTexture.middle,
@@ -6564,7 +6875,7 @@ function addChunkObPart(
                 
     }
 
-    if(obj.bottom || obj.bottomRoughness != undefined || obj.bottomMetalness != undefined) {
+    if(!data.topOnly && (obj.bottom || obj.bottomRoughness != undefined || obj.bottomMetalness != undefined)) {
 
         useBottom = getTextureIndex({
             texture: obj.bottom || defTexture.middle,
@@ -6592,7 +6903,7 @@ function addChunkObPart(
 
         if(obj.isWater) {
 
-            floorZ = 0;
+            //floorZ = 1;
 
             waterTop = getTextureIndex({
                 texture: obj.top,
@@ -6612,29 +6923,7 @@ function addChunkObPart(
                 return null;
             }
 
-            /*
-            opacity = instance.defaultWaterOpacity;
 
-            useMid = getTextureIndex({
-                texture: "#000000",
-                noise: false,
-                noiseSize: instance.vppSize,
-                topBlendColor: null,
-                opacity: 0,
-                roughness: obj.middleRoughness != undefined ? obj.middleRoughness : defTexture.middleRoughness,
-                metalness: obj.middleMetalness != undefined ? obj.middleMetalness : defTexture.middleMetalness
-            },data,instance);
-                    
-            waterColor = obj.top;
-
-            if(useMid == -1) {
-                setTimeout(function() {
-                    instance.addChunk(data);
-                }, 200);
-            
-                return null;
-            }
-                */
         }
 
         let speckles = null;
@@ -6741,25 +7030,11 @@ function addChunkObPart(
             let ndx = waterPositions.length / 3;
 
             for (const {pos, uv} of altcorners) {
-                waterPositions.push(pos[0] + x, pos[1] + obj.z, pos[2] + z);
+                waterPositions.push(pos[0] + renderX, pos[1] + obj.z, pos[2] + renderZ);
                 waterNormals.push(...dir);
-
-                
-                
 
                 let tx = waterTop;
                            
-                
-                /*
-                if(uvRow == 2) {
-                    tx = useTop;
-                }
-
-                if(uvRow == 1) {
-                    tx = useBottom;
-                }
-                    */
-                    
 
                 let textureRow = 0;
 
@@ -6779,10 +7054,29 @@ function addChunkObPart(
         }
     }
 
-    for(let y = 0; y < WORLD_HEIGHT; y++) {
+    let by = 0;
+
+    if(waterTop && obj.isWater) {
+        by = 1;
+    }
+
+    //by = 1;
+
+    for(let y = by; y < WORLD_HEIGHT; y++) {
         // there is ground here
         if(y <= floorZ) {
+
+            // topOnly chunks (flat decal overlays like roads) never need buried layers or side/bottom
+            // faces - skip straight to just the top face at the actual surface height
+            if(data.topOnly && y != floorZ) {
+                continue;
+            }
+
             for (const {dir, corners, uvRow, altcorners, slopes, smdepress} of TEXTURE_FACES) {
+
+                if(data.topOnly && uvRow != 2) {
+                    continue;
+                }
 
                 const ux = x + dir[0];
                 const uy = y + dir[1];
@@ -6798,6 +7092,11 @@ function addChunkObPart(
                 );
                 
                 let shouldSkip = false;
+
+                // waterNeighbor must be tracked per face: if it stays set once found, every later
+                // face of this tile (even ones facing away from water, and every buried y-layer)
+                // gets force-emitted plus the water skirt, dangling geometry below the map
+                let waterNeighbor = false;
 
                 if(neighbor && neighbor != -1) {
                     if(!neighbor.isWater) {
@@ -6865,10 +7164,17 @@ function addChunkObPart(
                     if(doWater) {
 
                         for (const {pos, uv} of corners) {
-                            positions.push(pos[0] + x, (pos[1] + y) - 1, pos[2] + z);
+                            positions.push(pos[0] + renderX, (pos[1] + y) - 1, pos[2] + renderZ);
                             normals.push(...dir);
 
-                            let tx = useTop;
+                            // the sunken top of the water column (the visible ocean floor) uses
+                            // the tile's bottom color, while the underwater side walls use the
+                            // middle/side color so they can match the dirt sides of land tiles
+                            let tx = useBottom;
+
+                            if(uvRow == 0) {
+                                tx = useMid;
+                            }
 
                             let textureRow = 0;
 
@@ -6887,7 +7193,7 @@ function addChunkObPart(
                         );
                     } else {
                         for (const {pos, uv} of usecor) {
-                            positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
+                            positions.push(pos[0] + renderX, pos[1] + y, pos[2] + renderZ);
                             normals.push(...dir);
 
                             let tx = useMid;
@@ -6916,7 +7222,10 @@ function addChunkObPart(
                             ndx + 2, ndx + 1, ndx + 3
                         );
 
-                        if(waterNeighbor || obj.slope) {
+                        // the water skirt hangs one unit below the current layer to meet the sunken
+                        // water column; at the world floor (y == 0) there is nothing below, so it
+                        // would just stick out beneath the bottom of the map
+                        if((waterNeighbor && y > 0) || obj.slope) {
 
                             ndx = positions.length / 3;
 
@@ -6928,7 +7237,7 @@ function addChunkObPart(
                                     uyy = pos[1] + y;
                                 }
 
-                                positions.push(pos[0] + x, uyy, pos[2] + z);
+                                positions.push(pos[0] + renderX, uyy, pos[2] + renderZ);
                                 normals.push(...dir);
 
                                 let tx = useBottom;
@@ -8626,6 +8935,20 @@ function finishInitMeshObject(worldObject) {
         });
     }
     
+    // vpp/voxel models are exported corner-anchored (min corner at local origin), not
+    // centered. The instanced batch path compensates by calling geometry.center() once
+    // on the shared buffer (setupVPPInstanceObject); a standalone (blockInstancing)
+    // mesh needs the same treatment done once here, or it swings off-center when
+    // rotated (rotation happens around obj.object's origin, not the model's visual
+    // center) instead of spinning in place, and the wrapper's tile-centering math
+    // (which assumes a centered model, see normalizeObjectPosition) is thrown off.
+    if(worldObject.subType == "vpp" && !worldObject.isSymmetrical) {
+        let box = new Box3().setFromObject(worldObject.mesh);
+        let center = new Vector3();
+        box.getCenter(center);
+        worldObject.mesh.position.sub(center);
+    }
+
     worldObject.object.add(worldObject.mesh);
 
     normalizeObjectPosition(worldObject);
@@ -8655,40 +8978,90 @@ function getCubeGeometry(w, h, slope = false) {
     return geo;
 }
 
-function getLineMaterial(color,width,dashed) {
+// Builds a real-width line material using three's LineMaterial (Line2/LineSegments2).
+// Unlike LineBasicMaterial/LineDashedMaterial, linewidth here is honored in actual
+// screen pixels by the GPU (rendered as camera-facing quad strips), so borders stay
+// visible at any zoom. Resolution must be set per-material and updated on resize.
+function getLineMaterial(color,width,dashed,resolution,role) {
     let dashName = "nodash";
 
     if(dashed) {
         dashName = "dash";
     }
 
-    let matName = "linemat." + color + "." + width + "." + dashName;
+    if(!role) {
+        role = "";
+    }
+
+    let matName = "linemat." + color + "." + width + "." + dashName + "." + role;
 
     if(commonMaterials[matName]) {
-        return commonMaterials[matName];
+        const cached = commonMaterials[matName];
+
+        if(resolution && cached.resolution) {
+            cached.resolution.set(resolution.x, resolution.y);
+        }
+
+        return cached;
     }
 
     let matOptions = {};
 
     matOptions.color = color;
-    matOptions.linewidth = width;
+    matOptions.linewidth = width; // in pixels for LineMaterial
+
+    if(resolution) {
+        matOptions.resolution = new Vector2(resolution.x, resolution.y);
+    }
 
     let mat = null;
 
-
     if(dashed) {
-        matOptions.scale = 1;
+        matOptions.dashed = true;
+        matOptions.dashScale = 1;
         matOptions.dashSize = 0.25;
         matOptions.gapSize = 0.25;
+    }
 
-        mat = new LineDashedMaterial(matOptions);
-    } else {
-        mat = new LineBasicMaterial(matOptions);
+    mat = new LineMaterial(matOptions);
+
+    // when a line is drawn as an outline stack (wide "under" copy + main "over"
+    // copy of the same geometry), nudge their depths apart so the two coplanar
+    // camera-facing strips don't z-fight where they overlap
+    if(role == "under") {
+        mat.polygonOffset = true;
+        mat.polygonOffsetFactor = 1;
+        mat.polygonOffsetUnits = 1;
+    }
+
+    if(role == "over") {
+        mat.polygonOffset = true;
+        mat.polygonOffsetFactor = -1;
+        mat.polygonOffsetUnits = -1;
     }
 
     commonMaterials[matName] = mat;
 
     return mat;
+}
+
+// Converts an array of Vector3 point pairs (segment list) into the
+// LineSegmentsGeometry instanced format required by LineSegments2.
+function buildLineSegmentsGeometry(points) {
+    const positions = new Float32Array(points.length * 3);
+
+    for(let i = 0; i < points.length; i++) {
+        const p = points[i];
+
+        positions[i * 3] = p.x;
+        positions[i * 3 + 1] = p.y;
+        positions[i * 3 + 2] = p.z;
+    }
+
+    const geo = new LineSegmentsGeometry();
+    geo.setPositions(positions);
+
+    return geo;
 }
 
 function text2D(text, params) {
@@ -10400,7 +10773,6 @@ async function doWorkCanvasChunk(instance, data, callback) {
             }
 
             let floorZ = obj.z || 0;
-            let waterNeighbor = false;
 
 
             const imgX = x * useTextureSize;
@@ -10451,6 +10823,10 @@ async function doWorkCanvasChunk(instance, data, callback) {
                         );
 
                         let shouldSkip = false;
+
+                        // per-face, same reasoning as addChunkObPart - a sticky flag force-emits
+                        // and skirts every later face/layer of the tile
+                        let waterNeighbor = false;
 
                         if(neighbor && neighbor != -1) {
                             if(!neighbor.isWater) {
@@ -10561,7 +10937,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                     ndx + 2, ndx + 1, ndx + 3
                                 );
 
-                                if(waterNeighbor || obj.slope) {
+                                if((waterNeighbor && y > 0) || obj.slope) {
 
                                     ndx = positions.length / 3;
 
