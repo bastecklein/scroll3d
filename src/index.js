@@ -98,6 +98,20 @@ import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeome
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { objectGroup } from "three/src/nodes/core/UniformGroupNode.js";
 
+// The liquid system. Water is drawn as a lit, time-animated material on its own mesh
+// per chunk rather than as a camera-anchored plane -- see the module's header for why,
+// and for what it deliberately does not do.
+import {
+    LIQUID_DEFAULTS,
+    SHORE_ATTRIBUTE,
+    SHORE_EDGE_OFFSETS,
+    createLiquidMaterial,
+    measureNormalMapBias,
+    normalizeLiquidType,
+    sunIntensityFor,
+    updateLiquidUniforms
+} from "./water.js";
+
 
 
 
@@ -1117,6 +1131,13 @@ export class Scroll3dEngine {
         this.waterPlane = null;
         this.waterPosition = 0.6;
 
+        // Liquid surfaces. `liquidTypes` is the definitions the host app supplied,
+        // `liquidMaterials` is one ShaderMaterial per definition, shared by every chunk
+        // that draws it -- so a scene with fifty water chunks still has one material and
+        // one uniform update per frame. Built lazily by getLiquidMaterial().
+        this.liquidTypes = new Map();
+        this.liquidMaterials = new Map();
+
         this.lastNight = true;
 
         this.custCastOrigin = new Vector3();
@@ -2073,6 +2094,19 @@ export class Scroll3dEngine {
             removeObjectFromThree(instance, instance.waterPlane, true);
         }
 
+        // Liquid materials are shared between chunks, so chunk removal must not -- and
+        // cannot -- dispose them. They must not outlive the instance, though, or every
+        // scene teardown leaks one material per liquid.
+        if(instance.liquidMaterials) {
+            instance.liquidMaterials.forEach(function(liquidMaterial) {
+                if(liquidMaterial && liquidMaterial.dispose) {
+                    liquidMaterial.dispose();
+                }
+            });
+
+            instance.liquidMaterials.clear();
+        }
+
         if(instance.skydome) {
             removeObjectFromThree(instance, instance.skydome, true);
         }
@@ -2979,9 +3013,139 @@ export class Scroll3dEngine {
         instance.isSnowing = snowing;
     }
 
+    /**
+     * Define a liquid surface, replacing any definition of the same id.
+     *
+     * **This is the whole look, as data.** Every dial in `LIQUID_DEFAULTS` may be
+     * supplied -- colours, wave speed and scale, flow direction, distortion, foam and
+     * its width, how strongly the surface follows the scene's light, how bright it
+     * stays when the light is gone, specular strength and tightness, fresnel, sky
+     * reflection, opacity, normal scale, and an optional scrolling normal map. A
+     * partial definition is valid; anything unset keeps its default.
+     *
+     * More than one liquid may be defined at once, so a scene can have water and lava
+     * without an engine change. The engine owns the clock, the sun and the scene's
+     * ambient level; the app owns everything else.
+     *
+     * The chunk payload decides which liquid a tile draws by naming it on the tile:
+     * `{ isWater: true, liquid: "lava" }`. `isWater` alone means `"water"`.
+     *
+     * Replacing an existing definition rebuilds its material, and **every chunk already
+     * built keeps the old one** -- a material is chosen when a chunk's mesh is created.
+     * Rebuild the chunks afterwards to see the change everywhere.
+     *
+     * @param {string} id     Liquid id, matched by a tile's `liquid` field.
+     * @param {object} definition  Any subset of `LIQUID_DEFAULTS`.
+     */
+    setLiquidType(id, definition) {
+        const instance = this;
+
+        if(!id || typeof id !== "string") {
+            return null;
+        }
+
+        const normalized = normalizeLiquidType(id, definition);
+
+        instance.liquidTypes.set(id, normalized);
+
+        // Drop the built material, so the next chunk to ask gets one made from the new
+        // definition. Touching a material in place would either miss the uniforms that
+        // only exist when a normal map is supplied, or leave every other chunk on the
+        // old look -- so a definition change is a rebuild, and the caller decides when.
+        const stale = instance.liquidMaterials.get(id);
+
+        if(stale) {
+            instance.liquidMaterials.delete(id);
+        }
+
+        instance.shouldRender = true;
+
+        return normalized;
+    }
+
+    /**
+     * The definition a liquid id resolves to, or null. An id nobody defined is not an
+     * error here -- `getLiquidMaterial` falls back to `"water"` -- but returning null
+     * rather than a fabricated default keeps "the app asked for lava and there is no
+     * lava" distinguishable from "lava is defined".
+     */
+    getLiquidType(id) {
+        const instance = this;
+
+        if(!id || typeof id !== "string") {
+            return null;
+        }
+
+        return instance.liquidTypes.get(id) || null;
+    }
+
+    /**
+     * The shared material for a liquid, built on first use.
+     *
+     * Shared deliberately: one material per liquid for the whole scene, so the per-frame
+     * uniform update is a handful of writes no matter how many water chunks exist. That
+     * only works because a chunk's water mesh marks itself `preserveMaterial` -- without
+     * it, `removeObjectFromThree` disposes the material unconditionally when any chunk is
+     * removed and every other chunk's water would go black.
+     */
+    getLiquidMaterial(id) {
+        const instance = this;
+
+        const wantedId = (id && instance.liquidTypes.has(id)) ? id : "water";
+
+        const existing = instance.liquidMaterials.get(wantedId);
+
+        if(existing) {
+            return existing;
+        }
+
+        // The water liquid is always defined, because a tile that says `isWater` is the
+        // engine's oldest way of naming water and must keep working with no setup at all.
+        // A host that wants different water defines it with setLiquidType("water", ...).
+        if(wantedId === "water" && !instance.liquidTypes.has("water")) {
+            instance.liquidTypes.set("water", normalizeLiquidType("water", null));
+        }
+
+        const definition = instance.liquidTypes.get(wantedId);
+
+        if(!definition) {
+            return null;
+        }
+
+        // A URL is resolved here rather than in the material module, because the texture
+        // loader and its cache belong to this file and a second one would download the
+        // same image twice.
+        let texture = definition.texture || null;
+        let material = null;
+
+        const applyBias = function(loaded) {
+            const bias = measureNormalMapBias(loaded && loaded.image, loaded && loaded.colorSpace === SRGBColorSpace);
+
+            if(bias && material) {
+                material.uniforms.uNormalMapBias.value.copy(bias);
+                instance.shouldRender = true;
+            }
+        };
+
+        if(typeof texture === "string") {
+            texture = TEXTURE_LOADER.load(texture, applyBias);
+            texture.wrapS = texture.wrapT = RepeatWrapping;
+            texture.colorSpace = USE_COLORSPACE;
+        }
+
+        material = createLiquidMaterial(definition, texture);
+
+        if(texture && texture.image) {
+            applyBias(texture);
+        }
+
+        instance.liquidMaterials.set(wantedId, material);
+
+        return material;
+    }
+
     setWaterTexture(url) {
         let instance = this;
-
         instance.waterTextureUrl = url;
 
         if(url) {
@@ -9426,6 +9590,36 @@ function handleInstanceRender(instance, t) {
         stepParticleSystem(system,elapsed);
     }
 
+        // Tick every liquid material's scene-dependent uniforms. Once per material per
+    // frame, not once per chunk: the materials are shared between chunks, so this is a
+    // handful of writes however much water is on screen. Sun and sky are read from the
+    // engine's own lights and sky colours so that the glint on the water and the
+    // shadows on the land come from one source rather than from two numbers kept in step.
+    if(instance.liquidMaterials && instance.liquidMaterials.size > 0) {
+        const liquidTime = performance.now() * 0.001;
+
+        const ambientBase = (!instance.skydome && instance.stardome) ? 0.5 : 0.75;
+        let ambient = Number.isFinite(instance.hemiBrightness) ? instance.hemiBrightness * ambientBase : 0.5;
+
+        if(instance.sunAngle < 0 || instance.sunAngle > 180) {
+            ambient = Number.isFinite(instance.hemiBrightness) ? instance.hemiBrightness * 0.5 : 0.25;
+        }
+
+        const lighting = {
+            time: liquidTime,
+            sunAngle: instance.sunAngle,
+            sunColor: instance.sunColor,
+            sunIntensity: sunIntensityFor(instance.sunAngle, 1),
+            skyColor: instance.skyBottomColor,
+            ambient: ambient,
+            cameraPosition: instance.activeCamera ? instance.activeCamera.position : null
+        };
+
+        instance.liquidMaterials.forEach(function(liquidMaterial) {
+            updateLiquidUniforms(liquidMaterial, lighting);
+        });
+    }
+
     // Update enhanced water animation
     if(instance.waterPlane && instance.waterPlane.isSimpleWater) {
         const timeSeconds = performance.now() * 0.001;
@@ -10612,9 +10806,11 @@ async function doWorkCanvasChunk(instance, data, callback) {
         rOrder = data.rOrder;
     }
 
-    let waterColor = "#03A9F4";
-
     let hasWater = false;
+
+    // Which liquid this chunk's water tiles draw, or null if they disagree. A chunk is
+    // one draw call and one liquid, so a chunk of lava is one mesh.
+    let chunkLiquidId = "water";
 
     const x = data.x;
     const y = data.y;
@@ -10761,6 +10957,18 @@ async function doWorkCanvasChunk(instance, data, callback) {
     const uvs = [];
     const indices = [];
 
+    // Water geometry is collected separately from the land and becomes its own mesh
+    // with its own material -- the structure the legacy chunk path has always had, and
+    // which the canvas path did not. Two reasons it has to be separate here rather than
+    // optional: a chunk's surface is a **baked canvas texture**, which no material can
+    // animate, and the water quads sharing `uvs` with the land is what broke the uv
+    // buffer when they were pushed without their own uvs. Two arrays cannot desynchronise.
+    const waterPositions = [];
+    const waterNormals = [];
+    const waterUvs = [];
+    const waterIndices = [];
+    const waterShore = [];
+
     const txPerW = useTextureSize / atlasWidth;
     const txPerH = useTextureSize / atlasHeight;
 
@@ -10809,6 +11017,9 @@ async function doWorkCanvasChunk(instance, data, callback) {
                 // there is ground here
                 if(y <= floorZ) {
                     for (const {dir, corners, uvRow, altcorners, slopes, smdepress} of TEXTURE_FACES) {
+                        // uvRow is read below by the water branch, to tell a liquid
+                        // surface's top face from its walls: only the top face has a
+                        // shoreline, so the shore mask is only computed there.
 
                         const ux = x + dir[0];
                         const uy = y + dir[1];
@@ -10857,8 +11068,18 @@ async function doWorkCanvasChunk(instance, data, callback) {
                             }
                         }
 
-                        if(obj.isWater && instance.waterTexture) {
+                        if(obj.isWater) {
                             hasWater = true;
+
+                            // Which liquid these tiles draw. Every water tile in a chunk
+                            // has to agree, because a chunk's water is one mesh with one
+                            // material; a chunk that mixes liquids names none and gets the
+                            // default, which is more useful than refusing to draw it.
+                            const tileLiquid = obj.liquid || "water";
+
+                            if(tileLiquid !== chunkLiquidId) {
+                                chunkLiquidId = null;
+                            }
                         }
 
                         if(waterNeighbor) {
@@ -10883,23 +11104,74 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                 usecor = slopes[obj.slope];
                             }
 
-                            if(obj.isWater && instance.waterTexture) {
+                            if(obj.isWater) {
 
-                                for (const {pos, uv} of corners) {
-                                    positions.push(pos[0] + x, (pos[1] + y) - 1, pos[2] + z);
-                                    normals.push(...dir);
+                                // **Only the top face, at the tile's own top layer.** This is the
+                                // legacy path's rule (`if(uvRow != 2) continue`) and it is what makes
+                                // a water tile exactly one quad. It has to be explicit: the skip
+                                // logic above decides whether water and land *meet* and it does not
+                                // filter this out, so without the guard the branch fires once per
+                                // face per layer all the way down and a submerged tile emits a
+                                // stack of coincident quads plus vertical sheets where its walls
+                                // are.
+                                if(uvRow === 2 && y === floorZ) {
+                                    // One shore mask per edge of the tile, so foam lands on the
+                                    // edges that face land and not on the ones facing open water.
+                                    // A neighbour **outside the chunk counts as water**: guessing
+                                    // land there would draw a line of foam along every chunk
+                                    // boundary in mid-ocean.
+                                    const edgeShore = [0, 0, 0, 0];
 
-                                    const xInTile = uv[0] * txPerW;
-                                    const yInTile = uv[1] * txPerH;
+                                    for(let e = 0; e < SHORE_EDGE_OFFSETS.length; e++) {
+                                        const nx = x + SHORE_EDGE_OFFSETS[e][0];
+                                        const nz = z + SHORE_EDGE_OFFSETS[e][1];
 
-                                    uvs.push(topTxX + xInTile, topTxY + yInTile);
+                                        if(nx < 0 || nz < 0 || nx >= data.data.length || nz >= data.data.length) {
+                                            continue;
+                                        }
+
+                                        const edgeTile = data.data[nx][nz];
+
+                                        if(edgeTile && !edgeTile.isWater) {
+                                            edgeShore[e] = 1;
+                                        }
+                                    }
+
+                                    const waterNdx = waterPositions.length / 3;
+
+                                    // **`altcorners`, hardcoded, and that is the entire height
+                                    // story.** Its y is 0.9 in a 1.0-high tile -- a tenth below
+                                    // the neighbouring ground -- which is exactly where the legacy
+                                    // renderer put its water, and the height this was asked to
+                                    // match.
+                                    //
+                                    // **Not `usecor`, which was the first attempt and was wrong.**
+                                    // `usecor` starts as `altcorners` for a water tile and is then
+                                    // overwritten by the `isDepressed` and `slope` checks below it,
+                                    // so a tile with any slope resolves to the slope's corner set --
+                                    // whose y runs 1..2, a full tile above where water belongs. That
+                                    // is why the surface measured 2.0 instead of 1.8. The legacy path
+                                    // hardcodes `altcorners` for water for the same reason: a liquid
+                                    // surface is flat, and the tile's terrain shaping does not apply
+                                    // to it.
+                                    for (const {pos, uv} of altcorners) {
+                                        waterPositions.push(pos[0] + x, pos[1] + y, pos[2] + z);
+                                        waterNormals.push(...dir);
+
+                                        // Tile-local uvs (0..1 across the tile), not atlas
+                                        // coordinates: the surface is shaded by its own material,
+                                        // and the shoreline needs the distance to each edge, which
+                                        // atlas coordinates cannot express.
+                                        waterUvs.push(uv[0], uv[1]);
+
+                                        waterShore.push(edgeShore[0], edgeShore[1], edgeShore[2], edgeShore[3]);
+                                    }
+
+                                    waterIndices.push(
+                                        waterNdx, waterNdx + 1, waterNdx + 2,
+                                        waterNdx + 2, waterNdx + 1, waterNdx + 3
+                                    );
                                 }
-
-                                
-                                indices.push(
-                                    ndx, ndx + 1, ndx + 2,
-                                    ndx + 2, ndx + 1, ndx + 3
-                                );
                             } else {
                                 for (const {pos, uv} of usecor) {
                                     positions.push(pos[0] + x, pos[1] + y, pos[2] + z);
@@ -10965,6 +11237,17 @@ async function doWorkCanvasChunk(instance, data, callback) {
         }
     }
 
+
+    // A water tile must produce exactly one quad per surface face. Nothing checked
+    // this before, and the uv buffer once drifted out of step with the positions while
+    // every count still looked plausible -- so it is asserted rather than assumed.
+    if(waterShore.length !== waterUvs.length * 2 || waterUvs.length / 2 !== waterPositions.length / 3) {
+        console.warn("scroll3d: water buffers are not in step", {
+            positions: waterPositions.length / 3,
+            uvs: waterUvs.length / 2,
+            shore: waterShore.length / 4
+        });
+    }
 
     const positionNumComponents = 3;
     const normalNumComponents = 3;
@@ -11051,15 +11334,42 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
     instance.removeChunk(data.x, data.y, rOrder, 500);
 
+    // The chunk's water, as its own mesh under the same `"w"` suffix the legacy path
+    // and removeChunk() already use -- so removal, disposal and the chunk lifecycle
+    // need no change at all.
+    let waterMesh = null;
+
+    if(hasWater && waterPositions.length > 0) {
+        waterMesh = createChunkWaterMesh(
+            instance,
+            waterPositions,
+            waterNormals,
+            waterUvs,
+            waterShore,
+            waterIndices,
+            data
+        );
+    }
+
     instance.chunks[chunkId] = mesh;
     instance.scene.add(mesh);
     instance.hitTestObjects.push(mesh);
 
+    if(waterMesh) {
+        const waterChunkId = chunkId + "w";
+
+        instance.chunks[waterChunkId] = waterMesh;
+        instance.scene.add(waterMesh);
+        instance.hitTestObjects.push(waterMesh);
+    }
+
     clearAllParticleSystems(instance);
 
-    if(hasWater && instance.waterTexture && !instance.waterPlane) {
-        instance.setWater(waterColor, 1.8);
-    }
+    // The refractive plane used to be built from here, conditionally, which made whether
+    // a scene had one depend on whether a chunk happened to be re-added at the right
+    // moment. Water is the per-chunk mesh above now, so the plane is gone from this path
+    // rather than switched off -- see setWater(), which is deprecated and kept only for
+    // callers that still ask for it directly.
 
     callback();
 }
@@ -11534,8 +11844,99 @@ function pollGamepads() {
     GPH.forcePoll();
 }
 
-function createLegacyChunkMesh(positions, normals, uvs, indices, x, y, chunkSize, castShadow, materialOverride) {
-    const cellgeo = new BufferGeometry();
+/**
+ * Build one chunk's liquid surface as a mesh of its own.
+ *
+ * **This is the structural half of the water rework, and it is what makes an animated
+ * surface possible at all.** Under the canvas path a chunk's land surface is a *baked
+ * canvas texture*, so there is nothing for an animated material to animate; the water
+ * quads have to leave the land's geometry and become their own mesh before they can have
+ * a material of their own. The legacy chunk path has always worked this way, and this is
+ * the canvas path catching up. The chunk's land canvas still contains the water tile
+ * images it always did; nothing samples those cells now, which costs a little wasted
+ * atlas space and no correctness.
+ *
+ * It is also why the uv desynchronisation that used to live in the water branch cannot
+ * come back: those uvs are a separate array now, so they cannot drift out of step with
+ * the land's positions however the branch is changed later. The caller asserts that.
+ *
+ * The mesh follows the legacy path's conventions exactly, because `removeChunk()` and
+ * `removeObjectFromThree()` already handle them:
+ *
+ * - It is stored under the chunk id with a `"w"` suffix, which is where `removeChunk()`
+ *   looks for a chunk's water.
+ * - **`userData.preserveMaterial` is set, and that is load-bearing.**
+ *   `removeObjectFromThree` disposes a mesh's material unconditionally, and this
+ *   material is shared by every liquid chunk in the scene -- so without this flag the
+ *   first chunk removal destroys the material and every other water chunk goes black.
+ * - It neither casts nor receives shadows. A liquid surface casting a shadow onto the
+ *   recess it sits in reads as a dark ring around every lake, and the material is
+ *   transparent-capable, so it is kept out of the shadow passes deliberately.
+ *
+ * The geometry is scaled and positioned exactly as the land's is, because a water tile
+ * has to occupy the same world space as the tile it belongs to.
+ */
+function createChunkWaterMesh(instance, positions, normals, uvs, shore, indices, data, liquidId) {
+    const geometry = new BufferGeometry();
+
+    geometry.setAttribute(
+        "position",
+        new BufferAttribute(new Float32Array(positions), 3));
+
+    geometry.setAttribute(
+        "normal",
+        new BufferAttribute(new Float32Array(normals), 3));
+
+    geometry.setAttribute(
+        "uv",
+        new BufferAttribute(new Float32Array(uvs), 2));
+
+    // The per-edge shore mask. Interpolated as a `vec4` across the quad, which is what
+    // lets the fragment shader put foam on the edges that face land and leave the ones
+    // facing open water clean -- so a river gets banks on both sides and a bay gets
+    // foam only where it meets the shore.
+    geometry.setAttribute(
+        SHORE_ATTRIBUTE,
+        new BufferAttribute(new Float32Array(shore), 4));
+
+    geometry.setIndex(indices);
+
+    // The same doubling the land geometry gets, then the same chunk-origin offset. Both
+    // are required for the water to land on its own tiles.
+    geometry.scale(2, 2, 2);
+
+    geometry.normalsNeedUpdate = true;
+
+    const material = instance.getLiquidMaterial(liquidId);
+
+    const mesh = new Mesh(geometry, material);
+
+    mesh.userData.preserveMaterial = true;
+
+    const meshX = Math.round((data.x * instance.chunkSize) * 2);
+    const meshY = Math.round((data.y * instance.chunkSize) * 2);
+
+    mesh.position.set(meshX, 0, meshY);
+
+    // Nudged up by the same hair the legacy path nudges its overlay chunks by. The land's
+    // floor under a water tile is at this exact height, so without it the two are coplanar
+    // and the result depends on draw order and the depth function rather than on anything
+    // intended. Land draws first at renderOrder 0, so "a hair above" is unambiguous.
+    mesh.position.y = 0.002;
+
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+
+    // Drawn after the opaque land it sits inside. Harmless while the liquid is opaque,
+    // because depth testing hides it either way, and necessary once `opacity` is lowered:
+    // this engine draws no floor under a water tile's recess, so a blending surface has
+    // to be composited deliberately rather than by chance.
+    mesh.renderOrder = 1;
+
+    return mesh;
+}
+
+function createLegacyChunkMesh(positions, normals, uvs, indices, x, y, chunkSize, castShadow, materialOverride) {    const cellgeo = new BufferGeometry();
 
     const positionNumComponents = 3;
     const normalNumComponents = 3;
