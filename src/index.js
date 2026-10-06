@@ -10889,18 +10889,10 @@ async function doWorkCanvasChunk(instance, data, callback) {
                                     positions.push(pos[0] + x, (pos[1] + y) - 1, pos[2] + z);
                                     normals.push(...dir);
 
-                                    /*
-                                    let tx = useTop;
+                                    const xInTile = uv[0] * txPerW;
+                                    const yInTile = uv[1] * txPerH;
 
-                                    let textureRow = 0;
-
-                                    let utx = useTextureSize * TEXTURE_SIZE_MULTIPLIER;
-
-                                    let uvx = (tx +   uv[0]) * utx / totalAtlasSize;
-
-                                    let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
-
-                                    uvs.push(uvx,uvy);*/
+                                    uvs.push(topTxX + xInTile, topTxY + yInTile);
                                 }
 
                                 
