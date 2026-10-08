@@ -360,3 +360,17 @@ rely on hit-testing, per-object materials or animation on bm objects.
 
 **Cells:** a single batch per model would never be frustum-culled; per-chunk batches multiply draw
 calls. Two chunks per cell is a middle value, not a measured optimum.
+
+## 2026-10-08 — The per-frame object loop visits only objects that need updates
+
+**Decided:** keep `activeUpdateObjects` as a Set containing only loaded animated bm models and
+flickering point lights. Add/remove and async model-load paths maintain membership; clearing an
+instance marks its objects disposed before releasing them, so a late model callback cannot revive
+an object after teardown.
+
+**Why:** the old render loop visited every object to discover that almost all had no animation or
+flicker. Static scenery now opts into instancing, but vehicles and other host objects can still
+produce many ordinary `bm` objects. The set makes frame work scale with animated/flickering objects
+rather than total placed models, while preserving the existing distance and animation LOD checks.
+The set was exercised in the browser with a static tree, an animated coal plant and a flickering
+point light: only the latter two entered it, and removing them left it empty.

@@ -1160,6 +1160,7 @@ export class Scroll3dEngine {
         this.particleSystems = {};
         this.chunks = {};
         this.objects = {};
+        this.activeUpdateObjects = new Set();
         this.hitTestObjects = [];
 
         this.lastHoverReport = {
@@ -1319,6 +1320,7 @@ export class Scroll3dEngine {
 
         const obj = new WorldObject(options);
         instance.objects[obj.id] = obj;
+        refreshObjectLoopMembership(obj);
 
         // An instanced bm object never joins the scene itself: its parts are drawn by a
         // shared InstancedMesh, and initBMObject adds it here only if it cannot be batched.
@@ -1608,6 +1610,7 @@ export class Scroll3dEngine {
             removeFromArray(instance.hitTestObjects, object.mesh);
         }
 
+        instance.activeUpdateObjects.delete(object);
         removeFromBMInstanceBatch(object);
         
         object.isDisposed = true;
@@ -2132,6 +2135,8 @@ export class Scroll3dEngine {
 
         for(let objname in instance.objects) {
             const obj = instance.objects[objname];
+            obj.isDisposed = true;
+            instance.activeUpdateObjects.delete(obj);
             removeObjectFromThree(instance,obj.object,true);
         }
 
@@ -2144,6 +2149,7 @@ export class Scroll3dEngine {
         }
 
         instance.objects = {};
+        instance.activeUpdateObjects.clear();
         instance.chunks = {};
         instance.hitTestObjects = [];
         instance.particleSystems = {};
@@ -5298,6 +5304,8 @@ function initBMObject(obj) {
 
 
         finishInitMeshObject(obj);
+
+        refreshObjectLoopMembership(obj);
 
         if(obj.bmInstanceRequested) {
             if(attachBMInstance(obj)) {
@@ -9945,8 +9953,7 @@ function handleInstanceRender(instance, t) {
 
     beginObjectUpdatePass(instance);
 
-    for(let obid in instance.objects) {
-        const ob = instance.objects[obid];
+    for(const ob of instance.activeUpdateObjects) {
         updateObjectLoop(instance, ob, instance.curDelta);
     }
 
@@ -12104,6 +12111,22 @@ function updateObjectLoop(instance, obj, delta) {
         }
 
         
+    }
+}
+
+function refreshObjectLoopMembership(obj) {
+    if(!obj || !obj.instance || !obj.instance.activeUpdateObjects) {
+        return;
+    }
+
+    const hasAnimations = obj.subType == "bm" && obj.mesh && obj.mesh.bmDat
+        && obj.mesh.bmDat.animations && Object.keys(obj.mesh.bmDat.animations).length > 0;
+    const needsUpdate = (obj.type == "pointlight" && obj.flickers) || hasAnimations;
+
+    if(needsUpdate) {
+        obj.instance.activeUpdateObjects.add(obj);
+    } else {
+        obj.instance.activeUpdateObjects.delete(obj);
     }
 }
 
