@@ -33,6 +33,7 @@ import {
     Clock,
     Color,
     ColorManagement,
+    DynamicDrawUsage,
     CircleGeometry,
     DataTexture,
     DoubleSide,
@@ -1319,7 +1320,9 @@ export class Scroll3dEngine {
         const obj = new WorldObject(options);
         instance.objects[obj.id] = obj;
 
-        if(obj.object) {
+        // An instanced bm object never joins the scene itself: its parts are drawn by a
+        // shared InstancedMesh, and initBMObject adds it here only if it cannot be batched.
+        if(obj.object && !obj.bmInstanceRequested) {
 
             obj.object.frustumCulled = true;
 
@@ -1604,6 +1607,8 @@ export class Scroll3dEngine {
         if(object.mesh) {
             removeFromArray(instance.hitTestObjects, object.mesh);
         }
+
+        removeFromBMInstanceBatch(object);
         
         object.isDisposed = true;
 
@@ -2129,6 +2134,8 @@ export class Scroll3dEngine {
             const obj = instance.objects[objname];
             removeObjectFromThree(instance,obj.object,true);
         }
+
+        disposeBMInstanceBatches(instance);
 
         for(let chunkid in instance.chunks) {
             let chunkParts = chunkid.split(":");
@@ -4223,6 +4230,12 @@ class WorldObject {
         this.bmAnimAccum = 0;
         this.bmAnimPhase = undefined;
 
+        // opt-in: draw a static, non-hittable bm model through a shared InstancedMesh batch
+        this.bmInstanceRequested = options.type == "bm" && options.instanced === true;
+        this.bmBatch = null;
+        this.bmSlot = -1;
+        this.bmParts = null;
+
         let defNoHit = false;
 
         if(this.type == "sprite" || this.type == "fakelight" || this.type == "badge" || this.type == "fogofwar") {
@@ -5285,6 +5298,16 @@ function initBMObject(obj) {
 
 
         finishInitMeshObject(obj);
+
+        if(obj.bmInstanceRequested) {
+            if(attachBMInstance(obj)) {
+                return;
+            }
+
+            obj.object.frustumCulled = true;
+            obj.instance.scene.add(obj.object);
+        }
+
         initVPPLightsAndEmitters(obj);
         removeObjFromHittest(obj.instance, obj);
 
@@ -5293,6 +5316,288 @@ function initBMObject(obj) {
         }
     });
 
+}
+
+/*
+ * Static bm instancing.
+ *
+ * A bm model is a Group of several meshes, so every placed copy costs one draw call per
+ * part plus a handful of scene-graph nodes that three.js re-walks every frame. For
+ * scenery placed by the thousand (trees, track, buildings) that dominates the frame.
+ * Objects added with `instanced: true` are instead drawn by one InstancedMesh per
+ * (model variant, part, spatial cell). Each object keeps its own detached Object3D
+ * hierarchy purely to compose its matrices, so positioning is identical to the
+ * standalone path. Animated models, models carrying lights/sprites/lines/points or
+ * custom shaders, hittable objects and toy mode fall back to the standalone path.
+ */
+const BM_INSTANCE_INITIAL_CAPACITY = 16;
+
+// Cells keep frustum culling meaningful; a batch spanning the world would never be culled.
+const BM_INSTANCE_CELL_CHUNKS = 2;
+
+function isVisibleWithin(child, root) {
+    for(let node = child; node && node !== root; node = node.parent) {
+        if(!node.visible) {
+            return false;
+        }
+    }
+
+    return root.visible;
+}
+
+function collectBMInstanceParts(mesh) {
+    const parts = [];
+    let eligible = true;
+
+    mesh.traverse(function(child) {
+        if(!eligible) {
+            return;
+        }
+
+        if(child.isLight || child.isSprite || child.isLine || child.isPoints || child.isSkinnedMesh || child.isInstancedMesh || child.isBatchedMesh) {
+            eligible = false;
+            return;
+        }
+
+        if(!child.isMesh) {
+            return;
+        }
+
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+        for(let i = 0; i < materials.length; i++) {
+            if(!materials[i] || materials[i].isShaderMaterial) {
+                eligible = false;
+                return;
+            }
+        }
+
+        if(isVisibleWithin(child, mesh)) {
+            parts.push(child);
+        }
+    });
+
+    return (eligible && parts.length > 0) ? parts : null;
+}
+
+function bmInstanceKey(obj) {
+    const cell = Math.max(1, (obj.instance.chunkSize || 16) * BM_INSTANCE_CELL_CHUNKS);
+
+    return obj.mesh.bmDat.cacheKey + "|" + Math.floor(obj.x / cell) + ":" + Math.floor(obj.y / cell);
+}
+
+function createBMInstancedMesh(instance, source, capacity) {
+    const im = new InstancedMesh(source.geometry, source.material, capacity);
+
+    im.count = 0;
+    im.castShadow = source.castShadow;
+    im.receiveShadow = source.receiveShadow;
+    im.renderOrder = source.renderOrder;
+    im.matrixAutoUpdate = false;
+    im.userData.preserveMaterial = true;
+    im.instanceMatrix.setUsage(DynamicDrawUsage);
+
+    instance.scene.add(im);
+
+    return im;
+}
+
+function growBMInstanceBatch(instance, batch) {
+    const capacity = batch.capacity * 2;
+
+    for(let p = 0; p < batch.parts.length; p++) {
+        const old = batch.parts[p];
+        const im = createBMInstancedMesh(instance, old, capacity);
+
+        im.instanceMatrix.array.set(old.instanceMatrix.array);
+        im.count = old.count;
+
+        instance.scene.remove(old);
+        old.dispose();
+
+        batch.parts[p] = im;
+    }
+
+    batch.capacity = capacity;
+}
+
+function writeBMInstanceSlot(obj) {
+    const batch = obj.bmBatch;
+
+    // obj.object is never parented, so this composes the object's own transform chain
+    obj.object.updateMatrixWorld(true);
+
+    for(let p = 0; p < batch.parts.length; p++) {
+        const im = batch.parts[p];
+
+        im.setMatrixAt(obj.bmSlot, obj.bmParts[p].matrixWorld);
+        im.instanceMatrix.needsUpdate = true;
+        im.boundingSphere = null;
+    }
+}
+
+function addToBMInstanceBatch(obj) {
+    const instance = obj.instance;
+    const key = bmInstanceKey(obj);
+
+    if(!instance.bmBatches) {
+        instance.bmBatches = new Map();
+    }
+
+    let batch = instance.bmBatches.get(key);
+
+    if(!batch) {
+        batch = {
+            key: key,
+            count: 0,
+            capacity: BM_INSTANCE_INITIAL_CAPACITY,
+            objects: [],
+            parts: []
+        };
+
+        for(let p = 0; p < obj.bmParts.length; p++) {
+            batch.parts.push(createBMInstancedMesh(instance, obj.bmParts[p], batch.capacity));
+        }
+
+        instance.bmBatches.set(key, batch);
+    } else if(batch.parts.length != obj.bmParts.length) {
+        return false;
+    }
+
+    if(batch.count >= batch.capacity) {
+        growBMInstanceBatch(instance, batch);
+    }
+
+    obj.bmBatch = batch;
+    obj.bmSlot = batch.count;
+
+    batch.objects[batch.count] = obj;
+    batch.count++;
+
+    for(let p = 0; p < batch.parts.length; p++) {
+        batch.parts[p].count = batch.count;
+    }
+
+    writeBMInstanceSlot(obj);
+
+    return true;
+}
+
+function removeFromBMInstanceBatch(obj) {
+    const batch = obj ? obj.bmBatch : null;
+
+    if(!batch) {
+        return;
+    }
+
+    const instance = obj.instance;
+    const slot = obj.bmSlot;
+    const last = batch.count - 1;
+
+    if(slot != last) {
+        const moved = batch.objects[last];
+
+        batch.objects[slot] = moved;
+        moved.bmSlot = slot;
+
+        for(let p = 0; p < batch.parts.length; p++) {
+            batch.parts[p].instanceMatrix.array.copyWithin(slot * 16, last * 16, last * 16 + 16);
+        }
+    }
+
+    batch.objects.length = last;
+    batch.count = last;
+
+    for(let p = 0; p < batch.parts.length; p++) {
+        const im = batch.parts[p];
+
+        im.count = last;
+        im.instanceMatrix.needsUpdate = true;
+        im.boundingSphere = null;
+    }
+
+    obj.bmBatch = null;
+    obj.bmSlot = -1;
+
+    if(batch.count == 0) {
+        for(let p = 0; p < batch.parts.length; p++) {
+            instance.scene.remove(batch.parts[p]);
+            batch.parts[p].dispose();
+        }
+
+        instance.bmBatches.delete(batch.key);
+    }
+}
+
+function disposeBMInstanceBatches(instance) {
+    if(!instance.bmBatches) {
+        return;
+    }
+
+    instance.bmBatches.forEach(function(batch) {
+        for(let p = 0; p < batch.parts.length; p++) {
+            instance.scene.remove(batch.parts[p]);
+            batch.parts[p].dispose();
+        }
+
+        for(let i = 0; i < batch.count; i++) {
+            batch.objects[i].bmBatch = null;
+            batch.objects[i].bmSlot = -1;
+        }
+    });
+
+    instance.bmBatches.clear();
+}
+
+/**
+ * Move a freshly loaded bm object into its instanced batch. Returns false when the
+ * model cannot be instanced, leaving the caller to use the standalone path.
+ */
+function attachBMInstance(obj) {
+    const instance = obj.instance;
+    const mesh = obj.mesh;
+
+    if(!instance || !mesh || !mesh.bmDat || !mesh.bmDat.cacheKey) {
+        return false;
+    }
+
+    if(!obj.notHittable || instance.toyModeEnabled) {
+        return false;
+    }
+
+    if(mesh.bmDat.animations && Object.keys(mesh.bmDat.animations).length > 0) {
+        return false;
+    }
+
+    const parts = collectBMInstanceParts(mesh);
+
+    if(!parts) {
+        return false;
+    }
+
+    obj.bmParts = parts;
+
+    if(!addToBMInstanceBatch(obj)) {
+        obj.bmParts = null;
+        return false;
+    }
+
+    return true;
+}
+
+function refreshBMInstance(obj) {
+    if(bmInstanceKey(obj) == obj.bmBatch.key) {
+        writeBMInstanceSlot(obj);
+        return;
+    }
+
+    removeFromBMInstanceBatch(obj);
+
+    if(!addToBMInstanceBatch(obj)) {
+        obj.bmParts = null;
+        obj.object.frustumCulled = true;
+        obj.instance.scene.add(obj.object);
+    }
 }
 
 /**
@@ -6259,10 +6564,6 @@ function normalizeObjectPosition(obj) {
         }
 
         if(obj.isSymmetrical) {
-            let box = new Box3().setFromObject( obj.mesh );
-            box.getCenter(obj.mesh.position);
-            obj.mesh.position.multiplyScalar(-1);
-
             obj.mesh.position.set(-obj.width, 0, -obj.height);
         }
 
@@ -6354,6 +6655,10 @@ function normalizeObjectPosition(obj) {
     
     if(obj && obj.object) {
         obj.object.updateMatrix();
+    }
+
+    if(obj.bmBatch) {
+        refreshBMInstance(obj);
     }
 }
 
@@ -11750,7 +12055,10 @@ function getAnimationStride(instance, dist) {
 
 function updateObjectLoop(instance, obj, delta) {
 
-    
+    // instanced bm objects are static by construction: nothing to animate or flicker
+    if(obj.bmBatch) {
+        return;
+    }
 
     const dist = distBetweenPoints(obj.x, obj.y, instance.centerPosition.x, instance.centerPosition.y);
 

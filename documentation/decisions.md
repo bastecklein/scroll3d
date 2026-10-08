@@ -341,3 +341,22 @@ knob if the band edge is ever the actual objection, at about twice the coverage.
 levels, so it needs a **distance fade written as a function of distance** — there is no texture mip chain
 to lean on because the field is analytic — or a narrower threshold band. Larger near-field glints are not
 the answer to it, as this change demonstrated.
+
+## 2026-10-08 — Opt-in instancing for static bm objects
+
+**Decided:** `addObject({ type: "bm", instanced: true, notHittable: true, ... })` draws the model through
+shared `InstancedMesh` batches keyed by bmloader cache key, part index and a spatial cell of
+`chunkSize * 2` tiles. The object keeps its own detached `Object3D` + cloned model purely to compose
+each part's matrix, so positioning and rotation are identical to the standalone path. Objects whose
+model has animations, contains lights/sprites/lines/points or ShaderMaterials, is hittable, or loads in
+toy mode fall back to the standalone path. Removal is swap-with-last; batches grow by doubling and are
+dropped when empty. Also removed a dead `Box3().setFromObject` in `normalizeObjectPosition` whose
+result was immediately overwritten — it traversed the whole model on every move.
+
+**Why:** a bm model is a Group of 2–9 meshes, so scenery placed per tile (My City's trees) produced
+thousands of draw calls and tens of thousands of scene nodes. Measured in My City: 5,037 → 127 draw
+calls and 15.9 → 1.1 ms per frame for ~2,800 trees. Opt-in rather than default because other host apps
+rely on hit-testing, per-object materials or animation on bm objects.
+
+**Cells:** a single batch per model would never be frustum-culled; per-chunk batches multiply draw
+calls. Two chunks per cell is a middle value, not a measured optimum.
