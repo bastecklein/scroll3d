@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Scroll3d Chunk Water Check</title>
+    <style>
+        body { margin: 0; background: #222; color: #fff; font-family: sans-serif; }
+        #scene { width: 100vw; height: 80vh; }
+        #result { white-space: pre-wrap; padding: 12px; }
+    </style>
+</head>
+<body>
+    <div id="scene"></div>
+    <div id="result"></div>
+    <script type="module">
+        import Scroll3d from "/scroll3d.js";
+
+        const result = document.getElementById("result");
+        let engine;
+
+        function assert(condition, message) {
+            if(!condition) {
+                throw new Error(message);
+            }
+        }
+
+        window.checkWater = async function(chunkMode, chunkWaterMode) {
+            if(!engine) {
+                engine = Scroll3d.getInstance(document.getElementById("scene"), {
+                    chunkMode,
+                    chunkWaterMode,
+                    antialias: true
+                });
+            }
+
+            engine.setChunkMode(chunkMode);
+            assert(engine.setChunkWaterMode(chunkWaterMode), "Mode must be accepted");
+            assert(!engine.setChunkWaterMode("invalid"), "Invalid mode must be rejected");
+            window.waterCheckEngine = engine;
+            engine.setChunkSize(4);
+            engine.setDefaultWaterOpacity(0.4);
+            engine.setLiquidType("water", {
+                texture: "/images/waterdudv.jpg",
+                textureScale: 0.2,
+                normalScale: 0.3,
+                waveSpeed: 0.7,
+                sparkleThreshold: 0.5
+            });
+            engine.setSky({
+                top: "#FFFDE7", bottom: "#E1F5FE",
+                sun: { color: "#ffffff", brightness: 0.6, yOffset: 360, angle: 40 },
+                noSky: true
+            });
+            engine.setActiveCamera("ortho");
+            engine.centerOnPosition({ x: 1.5, y: 1.5, z: 1, radius: 24, phi: 60, theta: 90 });
+
+            const data = Array.from({ length: 4 }, (_, tileX) =>
+                Array.from({ length: 4 }, () => ({
+                    z: 1,
+                    top: tileX === 0 ? "#4CAF50" : "#1565C0",
+                    middle: "#a05a2c",
+                    bottom: "#f4ebd7",
+                    isWater: tileX !== 0
+                })));
+            const chunk = {
+                x: 0, y: 0, data,
+                defTexture: { top: "#4CAF50", middle: "#a05a2c", bottom: "#f4ebd7", noise: false }
+            };
+
+            async function waitForMesh(previous) {
+                const deadline = performance.now() + 15000;
+                while(performance.now() < deadline) {
+                    const mesh = engine.chunks["0:0:0w"];
+                    if(mesh && mesh !== previous) {
+                        return mesh;
+                    }
+                    await new Promise(requestAnimationFrame);
+                }
+                throw new Error("Water chunk did not build");
+            }
+
+            const previous = engine.chunks["0:0:0w"];
+            engine.addChunk(chunk);
+            const first = await waitForMesh(previous);
+            const geometry = first.geometry;
+            assert(geometry.getAttribute("position").count === 48, "Expected 12 water quads");
+            assert(geometry.getAttribute("uv").count === 48, "Water UV count mismatch");
+            assert(geometry.index.count === 72, "Water index count mismatch");
+            assert(!engine.waterPlane, "Unexpected global water plane");
+            assert(first.material.isShaderMaterial === (chunkWaterMode === "shader") ||
+                (chunkWaterMode === "simple" && first.material.isMeshStandardMaterial), "Wrong material");
+            if(chunkWaterMode === "shader") {
+                assert(first.userData.preserveMaterial, "Shared material must survive chunk removal");
+                assert(geometry.getAttribute("aEdgeShore").count === 48, "Shore mask count mismatch");
+                assert(Array.from(geometry.getAttribute("aEdgeShore").array).some(value => value === 1), "Missing shoreline");
+                assert(Array.from(geometry.getAttribute("uv").array).every(value => value >= 0 && value <= 1), "Shader UVs must be tile-local");
+            } else if(chunkMode === "canvas") {
+                assert(first.material.opacity === 0.4, "Simple opacity ignored");
+                const colors = geometry.getAttribute("color");
+                for(let vertex = 1; vertex < colors.count; vertex++) {
+                    assert(colors.getX(vertex) === colors.getX(0), "Corner used a neighboring tile color");
+                }
+            }
+
+            engine.addChunk(chunk);
+            const replacement = await waitForMesh(first);
+            if(chunkWaterMode === "shader") {
+                assert(replacement.material === first.material, "Shader material was not shared");
+            }
+            const summary = chunkMode + "/" + chunkWaterMode + ": PASS";
+            result.textContent = summary;
+            return summary;
+        };
+    </script>
+</body>
+</html>

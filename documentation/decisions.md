@@ -374,3 +374,11 @@ produce many ordinary `bm` objects. The set makes frame work scale with animated
 rather than total placed models, while preserving the existing distance and animation LOD checks.
 The set was exercised in the browser with a static tree, an animated coal plant and a flickering
 point light: only the latter two entered it, and removing them left it empty.
+
+## 2026-10-09 - Water material selection is independent of chunk rendering mode
+
+**Decided:** Both chunk builders accept `chunkWaterMode: "simple" | "shader"`. Omission preserves existing behavior: simple legacy water and shader canvas water. Legacy shader geometry uses tile-local UVs and halo-aware shoreline masks. Canvas simple water uses per-quad tile colors and the default water opacity. The global-plane methods are deprecated but remain callable.
+
+**Why:** My Empire's development copy concealed the updated liquid implementation, and importing the real engine still left legacy chunks on the atlas material. Choosing terrain geometry must not force an app's water appearance. Existing Git-dependency consumers must not acquire a visual change or lose public methods merely by reinstalling.
+
+The liquid system is present in this checkout, superseding the earlier notes that it existed only in My City's patch. Browser checks cover all four chunk/material combinations and chunk replacement; desktop pixel comparisons confirm visible animated shader water. Real-device performance remains open.

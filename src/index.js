@@ -1036,6 +1036,7 @@ export class Scroll3dEngine {
 
         this.sunSphere = null;
         this.chunkMode = options.chunkMode || "legacy";
+        this.chunkWaterMode = options.chunkWaterMode || null;
 
         this.useVRControllerGrips = options.useVRControllerGrips || true;
 
@@ -1676,6 +1677,7 @@ export class Scroll3dEngine {
         return true;
     }
 
+    /** @deprecated Use chunkWaterMode and setLiquidType for per-chunk water. */
     setWater(color, zPos = 0.6) {
 
         if(this.waterPlane) {
@@ -1799,6 +1801,8 @@ export class Scroll3dEngine {
         const waterNormals = [];
         const waterUvs = [];
         const waterIndices = [];
+        const waterShore = [];
+        let chunkLiquidId = "water";
 
         let defMidBleed = null;
         let hasWater = false;
@@ -1888,7 +1892,8 @@ export class Scroll3dEngine {
                         waterNormals,
                         waterUvs,
                         waterIndices,
-                        haloOffset
+                        haloOffset,
+                        waterShore
                     );
 
                     if(!result) {
@@ -1897,6 +1902,7 @@ export class Scroll3dEngine {
 
                     if(result.hasWater) {
                         hasWater = true;
+                        chunkLiquidId = obj.liquid || chunkLiquidId;
                     }
 
                     waterColor = result.waterColor;
@@ -1946,7 +1952,11 @@ export class Scroll3dEngine {
             let wMesh = null;
 
             if(hasWater) {
-                wMesh = createLegacyChunkMesh(waterPositions, waterNormals, waterUvs, waterIndices, data.x, data.y, instance.chunkSize, false, curAtlasWaterMaterial || curAtlasMaterial);
+                if(instance.chunkWaterMode === "shader") {
+                    wMesh = createChunkWaterMesh(instance, waterPositions, waterNormals, waterUvs, waterShore, waterIndices, data, chunkLiquidId);
+                } else {
+                    wMesh = createLegacyChunkMesh(waterPositions, waterNormals, waterUvs, waterIndices, data.x, data.y, instance.chunkSize, false, curAtlasWaterMaterial || curAtlasMaterial);
+                }
             }
 
             // wait for this chunk's atlas texture to actually finish decoding before touching the
@@ -3026,6 +3036,16 @@ export class Scroll3dEngine {
         instance.isSnowing = snowing;
     }
 
+    setChunkWaterMode(mode) {
+        if(mode !== "simple" && mode !== "shader") {
+            return false;
+        }
+
+        this.chunkWaterMode = mode;
+        this.shouldRender = true;
+        return true;
+    }
+
     /**
      * Define a liquid surface, replacing any definition of the same id.
      *
@@ -3181,6 +3201,7 @@ export class Scroll3dEngine {
      * Set enhanced water that works with both orthographic and perspective cameras
      * Supports optional textures for realistic effects or stylized look without
      * @param {Object} options - Water configuration options
+    * @deprecated Use chunkWaterMode and setLiquidType for per-chunk water.
      */
     setSimpleWater(options) {
         const instance = this;
@@ -7310,7 +7331,8 @@ function addChunkObPart(
     waterNormals,
     waterUvs,
     waterIndices,
-    haloOffset = 0
+    haloOffset = 0,
+    waterShore = []
 ) {
     let floorZ = 0;
     let useTop = defTop;
@@ -7505,6 +7527,10 @@ function addChunkObPart(
             }
 
             let ndx = waterPositions.length / 3;
+            const edgeShore = SHORE_EDGE_OFFSETS.map(function(offset) {
+                const neighbor = data.data[x + offset[0]] && data.data[x + offset[0]][z + offset[1]];
+                return neighbor && !neighbor.isWater ? 1 : 0;
+            });
 
             for (const {pos, uv} of altcorners) {
                 waterPositions.push(pos[0] + renderX, pos[1] + obj.z, pos[2] + renderZ);
@@ -7521,7 +7547,12 @@ function addChunkObPart(
 
                 let uvy = 1 - (textureRow + 1 - uv[1]) * utx / utx;
 
-                waterUvs.push(uvx,uvy);
+                if(instance.chunkWaterMode === "shader") {
+                    waterUvs.push(uv[0], uv[1]);
+                    waterShore.push(...edgeShore);
+                } else {
+                    waterUvs.push(uvx,uvy);
+                }
             }
 
             waterIndices.push(
@@ -11659,7 +11690,8 @@ async function doWorkCanvasChunk(instance, data, callback) {
             waterUvs,
             waterShore,
             waterIndices,
-            data
+            data,
+            chunkLiquidId
         );
     }
 
@@ -12238,11 +12270,34 @@ function createChunkWaterMesh(instance, positions, normals, uvs, shore, indices,
 
     geometry.normalsNeedUpdate = true;
 
-    const material = instance.getLiquidMaterial(liquidId);
+    let material;
+
+    if(instance.chunkWaterMode === "simple") {
+        const colors = [];
+
+        for(let vertex = 0; vertex < positions.length; vertex += 12) {
+            const tileX = Math.floor((positions[vertex] + positions[vertex + 9]) / 2) + (data.haloOffset || 0);
+            const tileY = Math.floor((positions[vertex + 2] + positions[vertex + 11]) / 2) + (data.haloOffset || 0);
+            const tile = data.data[tileX] && data.data[tileX][tileY];
+            const color = new Color((tile && tile.top) || data.defTexture.top || "#03A9F4");
+            for(let corner = 0; corner < 4; corner++) {
+                colors.push(color.r, color.g, color.b);
+            }
+        }
+
+        geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 3));
+        material = new MeshStandardMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: instance.defaultWaterOpacity
+        });
+    } else {
+        material = instance.getLiquidMaterial(liquidId);
+    }
 
     const mesh = new Mesh(geometry, material);
 
-    mesh.userData.preserveMaterial = true;
+    mesh.userData.preserveMaterial = instance.chunkWaterMode !== "simple";
 
     const meshX = Math.round((data.x * instance.chunkSize) * 2);
     const meshY = Math.round((data.y * instance.chunkSize) * 2);
