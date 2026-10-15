@@ -382,3 +382,30 @@ point light: only the latter two entered it, and removing them left it empty.
 **Why:** My Empire's development copy concealed the updated liquid implementation, and importing the real engine still left legacy chunks on the atlas material. Choosing terrain geometry must not force an app's water appearance. Existing Git-dependency consumers must not acquire a visual change or lose public methods merely by reinstalling.
 
 The liquid system is present in this checkout, superseding the earlier notes that it existed only in My City's patch. Browser checks cover all four chunk/material combinations and chunk replacement; desktop pixel comparisons confirm visible animated shader water. Real-device performance remains open.
+
+## 2026-10-15 — Simple chunk water takes a default colour, so a payload that names textures is not painted white
+
+**Decided:** the `"simple"` chunk-water material falls back to a host-settable colour
+(`setDefaultWaterColor`, default `#03A9F4`) for tiles whose payload value is not a colour, and
+keeps per-tile colours when the payload carries them. The new `parseTileColor` accepts only the
+forms `THREE.Color.setStyle` understands: hex, `rgb()`/`hsl()`, and the 148 CSS colour names the
+engine's `three` carries.
+
+**Why:** the canvas chunk path names a tile's surface with an **atlas id** (`mycity:water`), and the
+simple branch fed that value straight into `new Color`, which cannot parse an id -- it warns
+(`THREE.Color: Unknown color mycity:water`) and returns **white**, once per water tile per chunk
+build. My City's flat-water fallback therefore rendered white and spammed the console. The fix
+cannot be "read the colour off the tile", because for that host there is no colour there; but it
+also must not *delete* the per-tile colour path, because the 2026-10-09 decision records "canvas
+simple water uses per-quad tile colors", and a host that keys its payload by colour would regress.
+Testing the string keeps both: a colour where there is one, the default where there is not.
+`setDefaultWaterColor` is named to pair with the existing `setDefaultWaterOpacity`.
+
+**Reached from:** My City's engine-settings panel, whose "water effects off" switches to
+`chunkWaterMode: "simple"` and passes its liquid `shallowColor` (`#0e6f9b`) through
+`setDefaultWaterColor`. The change was developed as a patch under that app's `node_modules` and is
+upstreamed here; its patch file is now history.
+
+**Not measured:** nothing here says the flat water looks right, only that it is no longer white and
+no longer warns. That is the host's look to judge.
+

@@ -149,6 +149,9 @@ const tempMatrix = new Matrix4();
 const TEXTURE_LOADER = new TextureLoader();
 const DEF_FOG_DENSITY = 0.0075;
 const DEF_WATER_OPACITY = 0.75;
+// The colour the "simple" chunk-water material falls back to when the tiles it is built
+// from name a texture rather than a colour. See `parseTileColor`.
+const DEF_SIMPLE_WATER_COLOR = "#03A9F4";
 // number of box-blur passes applied to the fog-of-war alpha channel for soft edges
 const FOG_BLUR_PASSES = 1;
 const MAX_MOUSE_MOVE = 5;
@@ -1090,6 +1093,7 @@ export class Scroll3dEngine {
         this.edgeScrollDir = null;
 
         this.defaultWaterOpacity = DEF_WATER_OPACITY;
+        this.defaultWaterColor = options.defaultWaterColor || DEF_SIMPLE_WATER_COLOR;
 
         this.vrCamHolder = null;
 
@@ -2864,6 +2868,15 @@ export class Scroll3dEngine {
 
     setDefaultWaterOpacity(op) {
         this.defaultWaterOpacity = op;
+    }
+
+    /**
+     * The flat colour of the "simple" chunk-water material, used for tiles whose payload
+     * names a texture instead of a colour. Pairs with `setDefaultWaterOpacity`. A payload
+     * that carries a real colour keeps per-tile colours; see `parseTileColor`.
+     */
+    setDefaultWaterColor(color) {
+        this.defaultWaterColor = color;
     }
 
     setSunAngle(deg) {
@@ -12208,6 +12221,44 @@ function pollGamepads() {
 }
 
 /**
+ * A colour string from a tile payload, or null when the value is not one.
+ *
+ * The canvas chunk path names a tile's surface with an **atlas id** (`mycity:water`), and
+ * `THREE.Color` cannot parse an id -- it warns and returns white. Legacy payloads instead
+ * carried a CSS colour in the same field. Testing the string here lets a payload that has
+ * real colours keep them, and sends only the rest to `defaultWaterColor`, rather than
+ * feeding an id to `new Color` and painting the surface white once per tile.
+ *
+ * The accepted forms are the ones `THREE.Color.setStyle` understands: hex, `rgb()`/`hsl()`
+ * and the 148 CSS colour names it carries.
+ */
+function parseTileColor(value) {
+    if(typeof value !== "string") {
+        return null;
+    }
+
+    const text = value.trim();
+
+    if(!text) {
+        return null;
+    }
+
+    if(/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(text)) {
+        return text;
+    }
+
+    if(/^rgba?\(/i.test(text) || /^hsla?\(/i.test(text)) {
+        return text;
+    }
+
+    if(Color.NAMES[text.toLowerCase()] !== undefined) {
+        return text;
+    }
+
+    return null;
+}
+
+/**
  * Build one chunk's liquid surface as a mesh of its own.
  *
  * **This is the structural half of the water rework, and it is what makes an animated
@@ -12274,12 +12325,19 @@ function createChunkWaterMesh(instance, positions, normals, uvs, shore, indices,
 
     if(instance.chunkWaterMode === "simple") {
         const colors = [];
+        // The colour a tile with no colour of its own gets. `defaultWaterColor` is the
+        // host's (see `setDefaultWaterColor`); the constant is the engine's own water.
+        const fallbackColor = new Color(instance.defaultWaterColor || DEF_SIMPLE_WATER_COLOR);
 
         for(let vertex = 0; vertex < positions.length; vertex += 12) {
             const tileX = Math.floor((positions[vertex] + positions[vertex + 9]) / 2) + (data.haloOffset || 0);
             const tileY = Math.floor((positions[vertex + 2] + positions[vertex + 11]) / 2) + (data.haloOffset || 0);
             const tile = data.data[tileX] && data.data[tileX][tileY];
-            const color = new Color((tile && tile.top) || data.defTexture.top || "#03A9F4");
+            // Per-tile colours when the payload carries them; the fallback when it names a
+            // texture instead (the canvas path's usual shape) -- see `parseTileColor`.
+            const tileColor = parseTileColor(tile && tile.top) || parseTileColor(data.defTexture.top);
+            const color = tileColor ? new Color(tileColor) : fallbackColor;
+
             for(let corner = 0; corner < 4; corner++) {
                 colors.push(color.r, color.g, color.b);
             }
