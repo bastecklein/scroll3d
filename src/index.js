@@ -162,6 +162,11 @@ const MAX_PHI = 180;
 
 const DEF_APERTURE_RATIO = 1.25;
 
+// Multisample count for the post-processor's render targets when the engine's
+// `antialias` option is on. Four is the usual quality/price point; the setting is
+// off by default and the host's UI is expected to say that it costs performance.
+const ANTIALIAS_SAMPLES = 4;
+
 const UV_TEXT_MIN = 0.01;
 const UV_TEXT_MAX = 0.99;
 
@@ -8139,6 +8144,24 @@ function initPostProcessor(instance) {
 
     const composer = new EffectComposer(instance.renderer);
     instance.postprocessor.composer = composer;
+
+    /*
+        `WebGLRenderer`'s `antialias` option only applies to the **default
+        framebuffer**. When the post-processor is active the scene is rendered into
+        an off-screen target, and the default framebuffer only receives the final
+        full-screen pass -- which has no geometry edges to smooth. The effect was
+        therefore invisible while the composer existed, however `setAntialiasingEnabled`
+        rebuilt the renderer.
+
+        Multisample the composer's own targets instead. Both are tagged because the
+        passes swap between them; three resolves the multisampled buffer when the next
+        pass samples it. This is independent of the context's `antialias` attribute,
+        which is why it also works when the setting is changed at runtime.
+    */
+    if(instance.antialias) {
+        composer.renderTarget1.samples = ANTIALIAS_SAMPLES;
+        composer.renderTarget2.samples = ANTIALIAS_SAMPLES;
+    }
 
     instance.postprocessor.render = new RenderPass(instance.scene, instance.activeCamera);
     composer.addPass(instance.postprocessor.render);

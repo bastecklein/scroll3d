@@ -409,3 +409,43 @@ upstreamed here; its patch file is now history.
 **Not measured:** nothing here says the flat water looks right, only that it is no longer white and
 no longer warns. That is the host's look to judge.
 
+
+## 2026-10-17 — `antialias` is applied to the composer's targets, not the canvas
+
+**Decided:** In `initPostProcessor`, when `instance.antialias` is true, set
+`composer.renderTarget1.samples` and `composer.renderTarget2.samples` to **4**. Both
+targets are tagged because the passes swap between them. The count is the engine's own
+constant `ANTIALIAS_SAMPLES`, and the host still controls the setting through the
+existing `antialias` option / `setAntialiasingEnabled()`.
+
+**Why:** The setting was **inert whenever the post-processor existed**, which is the
+engine's default. `WebGLRenderer`'s `antialias` option only affects the **default
+framebuffer**. With a composer, the scene is rendered into an off-screen
+`WebGLRenderTarget`, then the final pass draws a full-screen quad to the canvas -- a
+quad has no geometry edges to antialias, so the scene's real edges were never
+multisampled. `EffectComposer` creates its targets with `samples: 0`, so the setting
+did nothing. There is a second, independent reason a runtime toggle could not work:
+`setAntialiasingEnabled` rebuilds the renderer on the **same canvas element**, and WebGL
+context attributes are fixed when the context is created, so the new `antialias`
+attribute is ignored. Multisampling the render targets avoids both problems: it is a
+framebuffer property, independent of the context attribute, and it takes effect the
+next time the pass chain renders.
+
+**Limits:** 4x MSAA costs memory and fill rate, which is why the setting remains
+off by default and the host's UI says it costs performance. It relies on WebGL2
+multisampled `RGBA16F` support; the composer already uses `HalfFloatType`, but no
+device has been measured. **If a host disables the post-processor**, the engine falls
+back to `renderer.render()` into the default framebuffer, where a runtime antialias
+change still cannot take effect on the reused canvas; fixing that would mean recreating
+the canvas on the toggle, which is not done here. No consumer in this environment does
+that today.
+
+**Reached from:** My City, whose new engine-settings panel exposes an "Anti-aliasing"
+switch; the user reported it did nothing. My City carries this as a transitional
+`node_modules` patch (`documentation/patches/scroll3d-antialias-composer.patch`) until
+this repository is committed and pushed and the app's dependency is pinned to the new
+commit.
+
+**Verified:** the host app's production build compiles the changed source. This
+package has no tests and no browser was available, so the visual result and the device
+cost are unmeasured.

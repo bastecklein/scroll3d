@@ -21,3 +21,14 @@
 ### In Progress
 
 ### Done ✓
+
+- [ ] **OPEN, new 2026-10-17 — composer MSAA makes `antialias` real; it needs a browser look and a device cost.**
+  `initPostProcessor` now sets `composer.renderTarget1/2.samples = 4` when
+  `instance.antialias` is on, because the renderer's context attribute only reached the
+  default framebuffer and the composer renders the scene off-screen. **Unverified:**
+  no browser has rendered it and no phone has measured the 4x MSAA cost (Pixel 6a is
+  the named target). Decide whether 4 is the right sample count, and whether to support
+  a runtime antialias change when the post-processor is **off** -- that path would need
+  the canvas recreated, since context attributes cannot change on a reused canvas.
+  My City is consuming this as a `node_modules` patch until the commit is pushed and
+  its dependency is pinned.
