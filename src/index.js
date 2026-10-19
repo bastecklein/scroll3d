@@ -4285,6 +4285,7 @@ class WorldObject {
         this.bmBatch = null;
         this.bmSlot = -1;
         this.bmParts = null;
+        this.bmShared = null;
 
         let defNoHit = false;
 
@@ -5337,8 +5338,24 @@ function initBMObject(obj) {
         loadOpts.variables = obj.variables;
     }
 
-    bmLoader.load(loadOpts, function(mesh) {
-        if(obj.isDisposed || !mesh) {
+    // An instanced object never draws its own meshes, so it borrows the cached model
+    // instead of cloning it; see attachSharedBMInstance.
+    if(obj.bmInstanceRequested) {
+        loadOpts.shared = true;
+    }
+
+    bmLoader.load(loadOpts, function(model) {
+        if(obj.isDisposed || !model) {
+            return;
+        }
+
+        if(obj.bmInstanceRequested && attachSharedBMInstance(obj, model)) {
+            return;
+        }
+
+        const mesh = obj.bmInstanceRequested ? model.clone() : model;
+
+        if(!mesh) {
             return;
         }
 
@@ -5482,7 +5499,13 @@ function writeBMInstanceSlot(obj) {
     for(let p = 0; p < batch.parts.length; p++) {
         const im = batch.parts[p];
 
-        im.setMatrixAt(obj.bmSlot, obj.bmParts[p].matrixWorld);
+        if(obj.bmShared) {
+            bmSlotMatrix.multiplyMatrices(obj.mesh.matrixWorld, obj.bmParts[p].matrix);
+            im.setMatrixAt(obj.bmSlot, bmSlotMatrix);
+        } else {
+            im.setMatrixAt(obj.bmSlot, obj.bmParts[p].matrixWorld);
+        }
+
         im.instanceMatrix.needsUpdate = true;
         im.boundingSphere = null;
     }
@@ -5647,9 +5670,135 @@ function refreshBMInstance(obj) {
 
     if(!addToBMInstanceBatch(obj)) {
         obj.bmParts = null;
+
+        // A borrowed model has no meshes of its own to draw standalone, so take a clone.
+        if(obj.bmShared) {
+            const clone = obj.bmShared.template.clone();
+
+            obj.object.remove(obj.mesh);
+            obj.bmShared = null;
+            obj.mesh = clone;
+
+            finishInitMeshObject(obj);
+        }
+
         obj.object.frustumCulled = true;
         obj.instance.scene.add(obj.object);
     }
+}
+
+const bmSlotMatrix = new Matrix4();
+
+// cached model -> its instancing description, or null when it cannot be instanced
+const bmSharedTemplates = new WeakMap();
+
+/**
+ * What every instanced copy of a cached model needs, worked out once per model: its
+ * drawable parts, each part's matrix relative to the model root, its unscaled size, and
+ * the shadow flags finishInitMeshObject would give each part.
+ */
+function getBMSharedTemplate(template) {
+    let shared = bmSharedTemplates.get(template);
+
+    if(shared !== undefined) {
+        return shared;
+    }
+
+    shared = null;
+
+    const bmDat = template.bmDat;
+    const animated = bmDat && bmDat.animations && Object.keys(bmDat.animations).length > 0;
+    const parts = (bmDat && bmDat.cacheKey && !animated) ? collectBMInstanceParts(template) : null;
+
+    if(parts) {
+        template.updateMatrixWorld(true);
+
+        const rootInverse = new Matrix4().copy(template.matrixWorld).invert();
+        const size = new Vector3();
+
+        new Box3().setFromObject(template).getSize(size);
+
+        const modelRadius = size.length() / 2;
+
+        shared = {
+            template: template,
+            cacheKey: bmDat.cacheKey,
+            size: size,
+            parts: parts.map(function(part) {
+                if(!part.geometry.boundingSphere) {
+                    part.geometry.computeBoundingSphere();
+                }
+
+                const sphere = part.geometry.boundingSphere;
+                const partScale = Math.max(part.scale.x, part.scale.y, part.scale.z);
+                const partRadius = sphere ? sphere.radius * partScale : modelRadius;
+                const casts = partRadius >= modelRadius * BM_SHADOW_MIN_RATIO;
+
+                return {
+                    geometry: part.geometry,
+                    material: part.material,
+                    castShadow: casts,
+                    receiveShadow: casts,
+                    renderOrder: part.renderOrder,
+                    matrix: new Matrix4().multiplyMatrices(rootInverse, part.matrixWorld)
+                };
+            })
+        };
+    }
+
+    bmSharedTemplates.set(template, shared);
+
+    return shared;
+}
+
+/**
+ * Instance a bm object straight from the loader's cached model, without cloning it.
+ * An empty stand-in sits where the clone would have been, so placement and rotation
+ * compose exactly as on the cloned path. Returns false, leaving the object untouched,
+ * when the model or the object cannot be instanced.
+ */
+function attachSharedBMInstance(obj, template) {
+    const instance = obj.instance;
+
+    if(!instance || !obj.notHittable || instance.toyModeEnabled) {
+        return false;
+    }
+
+    const shared = getBMSharedTemplate(template);
+
+    if(!shared) {
+        return false;
+    }
+
+    const standIn = new Object3D();
+
+    standIn.bmDat = { cacheKey: shared.cacheKey, animations: {} };
+    standIn.scale.set(obj.scale, obj.scale, obj.scale);
+
+    obj.type = "mesh";
+    obj.subType = "bm";
+    obj.mesh = standIn;
+    obj.bmShared = shared;
+    obj.bmParts = shared.parts;
+
+    setMeshObjectBounds(obj, shared.size.clone().multiplyScalar(obj.scale));
+
+    obj.object.add(standIn);
+    normalizeObjectPosition(obj);
+
+    if(!addToBMInstanceBatch(obj)) {
+        obj.object.remove(standIn);
+        obj.type = "bm";
+        obj.subType = null;
+        obj.mesh = null;
+        obj.bmShared = null;
+        obj.bmParts = null;
+        return false;
+    }
+
+    refreshObjectLoopMembership(obj);
+
+    return true;
 }
 
 /**
@@ -9385,6 +9534,33 @@ function buildInteractionResult(instance, pointer, hitPosition, x, y, type) {
 // so measure once instead of traversing the whole hierarchy on each spawn.
 const bmBoundsCache = new Map();
 
+/** Footprint and tallness from a mesh object's measured (already scaled) size. */
+function setMeshObjectBounds(worldObject, size) {
+    worldObject.rawTallness = size.y;
+
+    if(worldObject.isSymmetrical) {
+        worldObject.width = Math.ceil(size.x / 2);
+        worldObject.height = Math.ceil(size.z / 2);
+
+        //for vpp, normalize w and h
+    
+        if(worldObject.width > worldObject.height) {
+            worldObject.height = worldObject.width;
+        }
+
+        if(worldObject.height > worldObject.width) {
+            worldObject.width = worldObject.height;
+        }
+    } else {
+
+        worldObject.width = size.x / 2;
+        worldObject.height = size.z / 2;
+    }
+
+    worldObject.width *= worldObject.scale;
+    worldObject.height *= worldObject.scale;
+}
+
 // Parts smaller than this fraction of the model radius contribute nothing visible
 // to the shadow pass, so they are excluded from it.
 const BM_SHADOW_MIN_RATIO = 0.12;
@@ -9410,29 +9586,7 @@ function finishInitMeshObject(worldObject) {
         }
     }
 
-    worldObject.rawTallness = size.y;
-
-    if(worldObject.isSymmetrical) {
-        worldObject.width = Math.ceil(size.x / 2);
-        worldObject.height = Math.ceil(size.z / 2);
-
-        //for vpp, normalize w and h
-    
-        if(worldObject.width > worldObject.height) {
-            worldObject.height = worldObject.width;
-        }
-
-        if(worldObject.height > worldObject.width) {
-            worldObject.width = worldObject.height;
-        }
-    } else {
-
-        worldObject.width = size.x / 2;
-        worldObject.height = size.z / 2;
-    }
-
-    worldObject.width *= worldObject.scale;
-    worldObject.height *= worldObject.scale;
+    setMeshObjectBounds(worldObject, size);
 
     let shouldCast = true;
     let shouldReceive = true;

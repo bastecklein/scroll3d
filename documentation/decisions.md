@@ -471,3 +471,24 @@ one, or a removed chunk from reappearing after a host tears its scene down.
 **Verified:** lint findings identical before and after; the rendered city was checked by
 screenshot. This package has no tests; a phone was not measured. My City carries the change
 as `documentation/patches/scroll3d-canvas-chunk-load.patch` until this repo is published.
+
+## 2026-10-19 — An instanced bm object borrows the cached model instead of cloning it
+
+**Decided:** `initBMObject` loads an `instanced: true` object with bmloader's `shared: true`
+option and hands it to `attachSharedBMInstance`. `getBMSharedTemplate` works out once per
+cached model its drawable parts, each part's matrix relative to the model root, its size and
+the per-part shadow flags `finishInitMeshObject` would have set. The object gets an empty
+`Object3D` stand-in where the clone used to be, so `normalizeObjectPosition` places and rotates
+it unchanged, and `writeBMInstanceSlot` composes `standIn.matrixWorld x partMatrix`. Anything
+the template cannot instance falls back to `model.clone()` and the old path; a later batch move
+that fails also swaps in a clone. The footprint maths moved into `setMeshObjectBounds` so both
+paths share it.
+
+**Why:** An instanced object never draws its own meshes, yet each one deep-cloned the model:
+in My City that was 16-25 ms of a 28-42 ms chunk crossing. After, a crossing is 9-14 ms.
+Instance matrices were compared against the cloned path for 1,344 parts across buildings,
+power poles and moving cars: equal to within 3e-5.
+
+**Constraint:** the shared model is the source every later clone is made from, so nothing on
+the instanced path may mutate it. The stand-in carries its own minimal `bmDat`
+(`cacheKey`, empty `animations`) for that reason.
