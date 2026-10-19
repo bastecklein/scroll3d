@@ -834,6 +834,8 @@ const TiltShiftShader = {
 const AXIS_DEADZONE = 0.25;
 
 let tileTextures = {};
+// tile texture id -> Promise of its image, while the load is in flight
+let tileImageLoads = new Map();
 
 let commonMaterials = {};
 let scrollInstances = {};
@@ -2005,6 +2007,9 @@ export class Scroll3dEngine {
         }
 
         const chunkId = x + ":" + y + ":" + rOrder;
+
+        // A canvas build still waiting for its images or its frame must not land after this.
+        bumpChunkBuildGen(instance, chunkId);
 
         delete chunkCanvases[chunkId + ":" + instance.id];
 
@@ -9932,6 +9937,8 @@ function handleInstanceRender(instance, t) {
         instance.curDelta = 1;
     }
 
+    runChunkBuildJobs(instance);
+
     handleInstanceGamepadScrolling(instance);
 
     if(instance.touchPadMode) {
@@ -11177,7 +11184,144 @@ function addCanvasChunk(instance, data) {
     });
 }
 
+// Canvas chunks are built from a per-instance queue drained inside the frame, so a whole
+// window of chunks arriving at once is spread across frames instead of stalling one.
+const CANVAS_CHUNK_BUILD_BUDGET_MS = 8;
+
+/**
+ * Starts a new generation for a chunk. A build only lands if it is still the newest
+ * when its turn comes, so a chunk rebuilt or removed while an older build was waiting
+ * never has that older build drawn over it.
+ */
+function bumpChunkBuildGen(instance, chunkId) {
+    if(!instance.chunkBuildGens) {
+        instance.chunkBuildGens = {};
+    }
+
+    const gen = (instance.chunkBuildGens[chunkId] || 0) + 1;
+
+    instance.chunkBuildGens[chunkId] = gen;
+
+    return gen;
+}
+
+function isCurrentChunkBuild(instance, chunkId, gen) {
+    return !!instance.chunkBuildGens && instance.chunkBuildGens[chunkId] === gen;
+}
+
+function queueChunkBuildJob(instance, job) {
+    if(!instance.chunkBuildJobs) {
+        instance.chunkBuildJobs = [];
+    }
+
+    instance.chunkBuildJobs.push(job);
+}
+
+function runChunkBuildJobs(instance) {
+    const jobs = instance.chunkBuildJobs;
+
+    if(!jobs || jobs.length == 0) {
+        return;
+    }
+
+    const start = performance.now();
+
+    do {
+        const job = jobs.shift();
+
+        try {
+            job();
+        } catch(err) {
+            console.error("scroll3d: chunk build failed", err);
+        }
+    } while(jobs.length > 0 && performance.now() - start < CANVAS_CHUNK_BUILD_BUDGET_MS);
+}
+
+/**
+ * Loads every image a canvas chunk draws, in parallel, so the build itself can be
+ * synchronous. Returns null when everything is already cached.
+ */
+function preloadCanvasChunkImages(data) {
+    const defTx = data.defTexture || {};
+    const seen = new Set();
+    const loads = [];
+
+    const want = function(name, which) {
+        if(!name) {
+            return;
+        }
+
+        const key = name + "|" + which;
+
+        if(seen.has(key)) {
+            return;
+        }
+
+        seen.add(key);
+
+        const source = tileImageSource(name, which);
+
+        if(source && !tileTextures[source.id]) {
+            loads.push(loadTileImageAsync(name, which));
+        }
+    };
+
+    want(defTx.middle, "default");
+
+    for(let x = 0; x < data.data.length; x++) {
+        for(let z = 0; z < data.data.length; z++) {
+            const obj = data.data[x][z];
+
+            if(!obj) {
+                continue;
+            }
+
+            const useTop = obj.top || defTx.top || null;
+
+            if(useTop) {
+                want(useTop, "default");
+                want(useTop, "bump");
+
+                if(obj.masks) {
+                    for(const edge in obj.masks) {
+                        want(obj.masks[edge], "default");
+                    }
+                }
+            }
+
+            want(obj.middle || defTx.middle || null, "default");
+        }
+    }
+
+    return loads.length > 0 ? Promise.all(loads) : null;
+}
+
 async function doWorkCanvasChunk(instance, data, callback) {
+    const rOrder = data.rOrder ? data.rOrder : "0";
+    const chunkId = data.x + ":" + data.y + ":" + rOrder;
+    const gen = bumpChunkBuildGen(instance, chunkId);
+
+    const pending = preloadCanvasChunkImages(data);
+
+    if(pending) {
+        await pending;
+    }
+
+    if(!isCurrentChunkBuild(instance, chunkId, gen)) {
+        callback();
+        return;
+    }
+
+    queueChunkBuildJob(instance, function() {
+        if(isCurrentChunkBuild(instance, chunkId, gen)) {
+            buildCanvasChunk(instance, data);
+        }
+
+        callback();
+    });
+}
+
+function buildCanvasChunk(instance, data) {
 
     let rOrder = "0";
 
@@ -11260,8 +11404,8 @@ async function doWorkCanvasChunk(instance, data, callback) {
                 const dx = x * useTextureSize;
                 const dy = z * useTextureSize;
 
-                const topImg = await loadTileImageAsync(useTop, "default");
-                const topBM = await loadTileImageAsync(useTop, "bump");
+                const topImg = getTileImage(useTop, "default");
+                const topBM = getTileImage(useTop, "bump");
 
                 if(topImg) {
                     ctx.drawImage(topImg, dx, dy, useTextureSize, useTextureSize);
@@ -11274,37 +11418,37 @@ async function doWorkCanvasChunk(instance, data, callback) {
 
                     if(obj.masks) {
                         if(obj.masks.top) {
-                            await drawMaskedTexture(ctx, obj.masks.top, "side", dx, dy, useTextureSize, MASK_ROTS.top);
+                            drawMaskedTexture(ctx, obj.masks.top, "side", dx, dy, useTextureSize, MASK_ROTS.top);
                         }
 
                         if(obj.masks.bottom) {
-                            await drawMaskedTexture(ctx, obj.masks.bottom, "side", dx, dy, useTextureSize, MASK_ROTS.bottom);
+                            drawMaskedTexture(ctx, obj.masks.bottom, "side", dx, dy, useTextureSize, MASK_ROTS.bottom);
                         }
 
                         if(obj.masks.left) {
-                            await drawMaskedTexture(ctx, obj.masks.left, "side", dx, dy, useTextureSize, MASK_ROTS.left);
+                            drawMaskedTexture(ctx, obj.masks.left, "side", dx, dy, useTextureSize, MASK_ROTS.left);
                         }
 
                         if(obj.masks.right) {
-                            await drawMaskedTexture(ctx, obj.masks.right, "side", dx, dy, useTextureSize, MASK_ROTS.right);
+                            drawMaskedTexture(ctx, obj.masks.right, "side", dx, dy, useTextureSize, MASK_ROTS.right);
                         }
 
 
 
                         if(obj.masks.bottomRight) {
-                            await drawMaskedTexture(ctx, obj.masks.bottomRight, "corner", dx, dy, useTextureSize, MASK_ROTS.right);
+                            drawMaskedTexture(ctx, obj.masks.bottomRight, "corner", dx, dy, useTextureSize, MASK_ROTS.right);
                         }
 
                         if(obj.masks.bottomLeft) {
-                            await drawMaskedTexture(ctx, obj.masks.bottomLeft, "corner", dx, dy, useTextureSize, MASK_ROTS.bottom);
+                            drawMaskedTexture(ctx, obj.masks.bottomLeft, "corner", dx, dy, useTextureSize, MASK_ROTS.bottom);
                         }
 
                         if(obj.masks.topLeft) {
-                            await drawMaskedTexture(ctx, obj.masks.topLeft, "corner", dx, dy, useTextureSize, MASK_ROTS.left);
+                            drawMaskedTexture(ctx, obj.masks.topLeft, "corner", dx, dy, useTextureSize, MASK_ROTS.left);
                         }
 
                         if(obj.masks.topRight) {
-                            await drawMaskedTexture(ctx, obj.masks.topRight, "corner", dx, dy, useTextureSize, MASK_ROTS.top);
+                            drawMaskedTexture(ctx, obj.masks.topRight, "corner", dx, dy, useTextureSize, MASK_ROTS.top);
                         }
 
                     }
@@ -11320,7 +11464,7 @@ async function doWorkCanvasChunk(instance, data, callback) {
                 sideIndicies[useSide] = sideIdxCtr;
                 sideIdxCtr++;
 
-                const sideImg = await loadTileImageAsync(useSide);
+                const sideImg = getTileImage(useSide);
 
                 if(sideImg) {
                     ctx.drawImage(sideImg, dx, dy, useTextureSize, useTextureSize);
@@ -11750,11 +11894,10 @@ async function doWorkCanvasChunk(instance, data, callback) {
     // moment. Water is the per-chunk mesh above now, so the plane is gone from this path
     // rather than switched off -- see setWater(), which is deprecated and kept only for
     // callers that still ask for it directly.
-
-    callback();
 }
 
-function loadTileImageAsync(name, which = "default") {
+/** Where a tile texture's image comes from, or null when the atlas has none. */
+function tileImageSource(name, which = "default") {
 
     let mapProp = "src";
 
@@ -11769,35 +11912,61 @@ function loadTileImageAsync(name, which = "default") {
     const txDef = cavasTextureAtlas[name];
 
     if(!txDef) {
-        return new Promise((resolve) => {
-            resolve(null);
-        });
+        return null;
     }
 
     const src = txDef[mapProp];
 
     if(!src) {
-        return new Promise((resolve) => {
-            resolve(null);
-        });
+        return null;
     }
 
-    const txId = name + "." + mapProp;
+    return { id: name + "." + mapProp, src: src };
+}
 
-    if(tileTextures[txId]) {
-        return new Promise((resolve) => {
-            resolve(tileTextures[txId]);
-        });
+/** A tile texture's image if it is already loaded, else null. */
+function getTileImage(name, which = "default") {
+    const source = tileImageSource(name, which);
+
+    return source ? (tileTextures[source.id] || null) : null;
+}
+
+/**
+ * Loads a tile texture's image once. Concurrent requests share one load, and a failed
+ * load resolves null (and is retried next time) rather than leaving a chunk waiting forever.
+ */
+function loadTileImageAsync(name, which = "default") {
+    const source = tileImageSource(name, which);
+
+    if(!source) {
+        return Promise.resolve(null);
     }
 
-    return new Promise((resolve) => {
-        loadImageAsync(src).then(function(img) {
-            tileTextures[txId] = img;
-            resolve(img);
-        });
-    });
+    const cache = tileTextures;
 
-    
+    if(cache[source.id]) {
+        return Promise.resolve(cache[source.id]);
+    }
+
+    let pending = tileImageLoads.get(source.id);
+
+    if(!pending) {
+        const loads = tileImageLoads;
+
+        pending = loadImageAsync(source.src).then(function(img) {
+            cache[source.id] = img;
+            return img;
+        }, function() {
+            console.warn("scroll3d: tile texture failed to load", source.src);
+            return null;
+        }).finally(function() {
+            loads.delete(source.id);
+        });
+
+        loads.set(source.id, pending);
+    }
+
+    return pending;
 }
 
 export function loadImageAsync(src) {
@@ -11811,16 +11980,23 @@ export function loadImageAsync(src) {
     });
 }
 
-async function generateMask(type = "side", blendWidth = 0.2, soften = 1.5) {
+/**
+ * A gradient alpha mask the size of one tile, drawn once and kept as a canvas.
+ * It used to be round-tripped through a PNG data URL and an Image decode, which made
+ * every first use of a mask an asynchronous wait in the middle of a chunk build.
+ */
+function getGradientMask(type = "side", blendWidth = 0.2, soften = 1.5) {
     const maskName = `s3dgrad_${type}_${blendWidth}_${soften}`;
     if (tileTextures[maskName]) {
         return tileTextures[maskName];
     }
 
-    genTexCanvas.width = useTextureSize;
-    genTexCanvas.height = useTextureSize;
+    const canvas = document.createElement("canvas");
+    canvas.width = useTextureSize;
+    canvas.height = useTextureSize;
 
-    const imgData = genTexContext.createImageData(useTextureSize, useTextureSize);
+    const context = canvas.getContext("2d");
+    const imgData = context.createImageData(useTextureSize, useTextureSize);
     const data = imgData.data;
 
     const total = useTextureSize - 1;
@@ -11854,12 +12030,9 @@ async function generateMask(type = "side", blendWidth = 0.2, soften = 1.5) {
         }
     }
 
-    genTexContext.putImageData(imgData, 0, 0);
-    const src = genTexCanvas.toDataURL("image/png");
-
-    const img = await loadImageAsync(src);
-    tileTextures[maskName] = img;
-    return img;
+    context.putImageData(imgData, 0, 0);
+    tileTextures[maskName] = canvas;
+    return canvas;
 }
 
 
@@ -11954,7 +12127,7 @@ async function generateNoiseMask() {
     return img;
 }
 
-async function drawMaskedTexture(ctx, neighborTex, mask, x, y, size, rotation) {
+function drawMaskedTexture(ctx, neighborTex, mask, x, y, size, rotation) {
 
     const maskName = neighborTex + "." + mask + "." + rotation.toFixed(3);
 
@@ -11963,7 +12136,8 @@ async function drawMaskedTexture(ctx, neighborTex, mask, x, y, size, rotation) {
         return;
     }
 
-    const neighborTexture = await loadTileImageAsync(neighborTex);
+    // Preloaded by preloadCanvasChunkImages before the chunk build runs.
+    const neighborTexture = getTileImage(neighborTex);
 
     if(!neighborTexture) {
         return;
@@ -11972,39 +12146,37 @@ async function drawMaskedTexture(ctx, neighborTex, mask, x, y, size, rotation) {
     let maskTx = null;
 
     if(mask == "side") {
-        maskTx = await generateMask("side", 0.35);
+        maskTx = getGradientMask("side", 0.35);
     }
 
     if(mask == "corner") {
-        maskTx = await generateMask("corner", 0.18);
+        maskTx = getGradientMask("corner", 0.18);
     }
     
     if(!maskTx) {
         return;
     }
 
-    genTexCanvas.width = size;
-    genTexCanvas.height = size;
+    // Kept as a canvas: drawImage takes one directly, so no PNG encode and Image decode.
+    const img = document.createElement("canvas");
+    img.width = size;
+    img.height = size;
 
-    genTexContext.drawImage(neighborTexture, 0, 0, size, size);
+    const imgContext = img.getContext("2d");
 
-    genTexContext.globalCompositeOperation = "destination-in";
+    imgContext.drawImage(neighborTexture, 0, 0, size, size);
 
-    genTexContext.save();
-    genTexContext.translate(size / 2, size / 2);
-    genTexContext.rotate(rotation);
+    imgContext.globalCompositeOperation = "destination-in";
 
-    genTexContext.drawImage(maskTx, -size /2, -size / 2, size, size);
-    genTexContext.restore();
+    imgContext.save();
+    imgContext.translate(size / 2, size / 2);
+    imgContext.rotate(rotation);
 
-    
-    
+    imgContext.drawImage(maskTx, -size /2, -size / 2, size, size);
+    imgContext.restore();
 
-    genTexContext.globalCompositeOperation = "source-over";
+    imgContext.globalCompositeOperation = "source-over";
 
-    const src = genTexCanvas.toDataURL("image/png");
-
-    const img = await loadImageAsync(src);
     tileTextures[maskName] = img;
 
 
@@ -12061,6 +12233,7 @@ function imgCoordToUV(x, y, width, height, txPerH) {
 export function setChunkTextureAtlas(atlas) {
     cavasTextureAtlas = atlas;
     tileTextures = {};
+    tileImageLoads = new Map();
 }
 
 // Animation level of detail. Entities outside the camera frustum are frozen, and

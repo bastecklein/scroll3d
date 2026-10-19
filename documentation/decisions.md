@@ -449,3 +449,25 @@ commit.
 **Verified:** the host app's production build compiles the changed source. This
 package has no tests and no browser was available, so the visual result and the device
 cost are unmeasured.
+
+## 2026-10-19 — Canvas chunks preload their images, then build from a per-frame queue
+
+**Decided:** `doWorkCanvasChunk` first loads every image the chunk draws in parallel
+(`preloadCanvasChunkImages`), with concurrent requests for one texture sharing a load
+(`loadTileImageAsync`), then queues a synchronous `buildCanvasChunk`. The queue is drained
+by `runChunkBuildJobs` from `handleInstanceRender`, at least one job and up to 8 ms a frame.
+Blend masks are kept as canvases (`getGradientMask`, `drawMaskedTexture`) rather than
+round-tripped through a PNG data URL and an `Image`. Each chunk carries a build generation,
+bumped by every build and by `removeChunk`; a build that is no longer the newest is dropped.
+A texture that fails to load resolves `null` instead of leaving the chunk pending forever.
+
+**Why:** Measured in My City (desktop Chrome, 25-chunk window, a 120x120 built city). The
+old path awaited one image or mask per tile in sequence and every waiting chunk loaded the
+same textures again, so chunk builds advanced one event-loop turn at a time; behind a busy
+main thread the window took ~20 s to appear. With this change and the bmloader fix it
+appears in ~1.1 s. The generation guard also stops an older build from landing over a newer
+one, or a removed chunk from reappearing after a host tears its scene down.
+
+**Verified:** lint findings identical before and after; the rendered city was checked by
+screenshot. This package has no tests; a phone was not measured. My City carries the change
+as `documentation/patches/scroll3d-canvas-chunk-load.patch` until this repo is published.
