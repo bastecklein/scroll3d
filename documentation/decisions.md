@@ -492,3 +492,8 @@ power poles and moving cars: equal to within 3e-5.
 **Constraint:** the shared model is the source every later clone is made from, so nothing on
 the instanced path may mutate it. The stand-in carries its own minimal `bmDat`
 (`cacheKey`, empty `animations`) for that reason.
+
+**Reached from:** My City, which measures dense-city scrolling and pins this change with
+bmloader's `shared: true` option in its lockfile. This is committed as `4ae2292` and pushed;
+`documentation/patches/scroll3d-shared-instancing.patch` is retained in My City as review history.
+No phone timing has been collected.
