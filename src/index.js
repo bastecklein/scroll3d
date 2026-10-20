@@ -1150,6 +1150,7 @@ export class Scroll3dEngine {
         // one uniform update per frame. Built lazily by getLiquidMaterial().
         this.liquidTypes = new Map();
         this.liquidMaterials = new Map();
+        this.lineMaterials = new Map();
 
         this.lastNight = true;
 
@@ -2174,6 +2175,10 @@ export class Scroll3dEngine {
 
         instance.objects = {};
         instance.activeUpdateObjects.clear();
+        for(const material of instance.lineMaterials.values()) {
+            material.dispose();
+        }
+        instance.lineMaterials.clear();
         instance.chunks = {};
         instance.hitTestObjects = [];
         instance.particleSystems = {};
@@ -4902,9 +4907,7 @@ function setInstanceSize(instance) {
 
     // keep real-width line materials (LineMaterial/Line2) in sync with the new
     // drawing buffer size so border/line thickness stays correct after resize
-    for(let matKey in commonMaterials) {
-        const m = commonMaterials[matKey];
-
+    for(const m of instance.lineMaterials.values()) {
         if(m && m.resolution) {
             m.resolution.set(renderWidth, renderHeight);
         }
@@ -6162,12 +6165,13 @@ function initLineObject(obj) {
             ? { x: instance.lastWidth, y: instance.lastHeight }
             : { x: window.innerWidth, y: window.innerHeight };
 
-        const mat = getLineMaterial(obj.color, obj.width, obj.dashed, res, obj.outline ? "over" : null);
+        const mat = getLineMaterial(instance, obj.color, obj.width, obj.dashed, res, obj.outline ? "over" : null);
 
         // track the material so its resolution can be kept in sync on resize
         obj.lineMaterial = mat;
 
         obj.mesh = new LineSegments2(geometry, mat);
+        obj.mesh.userData.preserveMaterial = true;
         obj.mesh.computeLineDistances();
         obj.object.add(obj.mesh);
 
@@ -6175,9 +6179,10 @@ function initLineObject(obj) {
         // Same geometry means the same dash distances, so the outline hugs the line
         // exactly and the dash gaps stay transparent instead of showing a solid bar
         if(obj.outline) {
-            const outlineMat = getLineMaterial(obj.outline, obj.outlineWidth || (obj.width * 2), obj.dashed, res, "under");
+            const outlineMat = getLineMaterial(instance, obj.outline, obj.outlineWidth || (obj.width * 2), obj.dashed, res, "under");
 
             obj.outlineMesh = new LineSegments2(geometry, outlineMat);
+            obj.outlineMesh.userData.preserveMaterial = true;
             obj.outlineMesh.computeLineDistances();
             obj.object.add(obj.outlineMesh);
         }
@@ -6260,8 +6265,14 @@ function initLineObject(obj) {
             // and overlay (1) chunks - the fill hovers just over translucent water, and
             // if the two transparent surfaces are left to sort themselves against each
             // other, whichever loses the depth race vanishes where they overlap
-            const rMat = new MeshBasicMaterial( { color: obj.color, side: DoubleSide, transparent: true, opacity:  obj.fillRef, depthWrite: false } );
+            const fillKey = "linefill." + obj.color + "." + obj.fillRef;
+            let rMat = instance.lineMaterials.get(fillKey);
+            if(!rMat) {
+                rMat = new MeshBasicMaterial( { color: obj.color, side: DoubleSide, transparent: true, opacity: obj.fillRef, depthWrite: false } );
+                instance.lineMaterials.set(fillKey, rMat);
+            }
             const rmesh = new Mesh(rGeo, rMat );
+            rmesh.userData.preserveMaterial = true;
             rmesh.renderOrder = 2;
 
             obj.object.add(rmesh);
@@ -9685,7 +9696,7 @@ function getCubeGeometry(w, h, slope = false) {
 // Unlike LineBasicMaterial/LineDashedMaterial, linewidth here is honored in actual
 // screen pixels by the GPU (rendered as camera-facing quad strips), so borders stay
 // visible at any zoom. Resolution must be set per-material and updated on resize.
-function getLineMaterial(color,width,dashed,resolution,role) {
+function getLineMaterial(instance,color,width,dashed,resolution,role) {
     let dashName = "nodash";
 
     if(dashed) {
@@ -9698,8 +9709,8 @@ function getLineMaterial(color,width,dashed,resolution,role) {
 
     let matName = "linemat." + color + "." + width + "." + dashName + "." + role;
 
-    if(commonMaterials[matName]) {
-        const cached = commonMaterials[matName];
+    if(instance.lineMaterials.has(matName)) {
+        const cached = instance.lineMaterials.get(matName);
 
         if(resolution && cached.resolution) {
             cached.resolution.set(resolution.x, resolution.y);
@@ -9743,7 +9754,8 @@ function getLineMaterial(color,width,dashed,resolution,role) {
         mat.polygonOffsetUnits = -1;
     }
 
-    commonMaterials[matName] = mat;
+    // The instance owns cached line/fill materials; removing a preview owns only its geometry.
+    instance.lineMaterials.set(matName, mat);
 
     return mat;
 }

@@ -1,5 +1,15 @@
 # scroll3d changelog
 
+## Unreleased - 2026-10-20
+
+### Fixed
+
+- Cache outline, line and tile-fill materials per engine instance. Rebuilding a
+  placement preview no longer disposes cached GPU programs and recompiles them on
+  the next frame. Geometry is still released on removal; cached materials are
+  disposed when all objects are cleared. Line resolution updates stay instance-local.
+- Regression checks: `node --test test/line-materials.test.mjs`.
+
 ## 1.1.0 - 2025-07-31
 
 ### Changed
