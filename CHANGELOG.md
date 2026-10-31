@@ -9,6 +9,12 @@
   the next frame. Geometry is still released on removal; cached materials are
   disposed when all objects are cleared. Line resolution updates stay instance-local.
 - Regression checks: `node --test test/line-materials.test.mjs`.
+- Standalone VPP meshes now center vertically using the model's measured
+  bounding-box center. Bottom-anchored voxel models no longer render half a model
+  height above their requested `z` when `isSymmetrical` is true. The center is
+  captured during the bounds measurement that already happens at load, so there
+  is no extra per-frame work. Regression checks:
+  `node --test test/mesh-centering.test.mjs`.
 
 ## 1.1.0 - 2025-07-31
 

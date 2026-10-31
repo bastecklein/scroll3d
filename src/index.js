@@ -6776,7 +6776,16 @@ function normalizeObjectPosition(obj) {
         }
 
         if(obj.isSymmetrical) {
-            obj.mesh.position.set(-obj.width, 0, -obj.height);
+            // VPP geometry is bottom-anchored, not centered. Use the center
+            // measured in finishInitMeshObject so the base sits on obj.z;
+            // non-VPP symmetrical meshes keep their previous origin.
+            let meshY = 0;
+
+            if(obj.subType == "vpp") {
+                meshY = -(obj.rawCenterY || 0);
+            }
+
+            obj.mesh.position.set(-obj.width, meshY, -obj.height);
         }
 
     }
@@ -9585,16 +9594,25 @@ function finishInitMeshObject(worldObject) {
         : null;
 
     let size = boundsKey ? bmBoundsCache.get(boundsKey) : null;
+    let rawCenterY = 0;
 
     if(!size) {
         const box = new Box3().setFromObject(worldObject.mesh);
 
         size = new Vector3();
         box.getSize(size);
+        rawCenterY = box.min.y + (size.y / 2);
 
         if(boundsKey) {
             bmBoundsCache.set(boundsKey, size);
         }
+    }
+
+    // Voxel models are exported bottom-anchored, so normalizeObjectPosition needs
+    // the box center to place their base on the requested z. Cache it here while
+    // the box is already being measured rather than rebuilding it on every move.
+    if(worldObject.subType == "vpp") {
+        worldObject.rawCenterY = rawCenterY;
     }
 
     setMeshObjectBounds(worldObject, size);
