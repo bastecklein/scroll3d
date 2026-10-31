@@ -6449,12 +6449,15 @@ function initCircleObject(obj) {
 
 function addObjToHittest(instance, obj, retryCount = 0) {
 
-    if(obj.notHittable) {
+    // A removed object can still have a retry timer in flight. Never let that
+    // timer put its disposed mesh back into the hit-test list; a stale mesh
+    // swallows clicks and resolves to no object.
+    if(obj.isDisposed || obj.notHittable) {
         return;
     }
 
     if(!obj.mesh) {
-        if(retryCount < 8) {
+        if(retryCount < 8 && !obj.isDisposed) {
             setTimeout(function() {
                 addObjToHittest(instance, obj, retryCount + 1);
             },1000);
@@ -6472,22 +6475,35 @@ function addObjToHittest(instance, obj, retryCount = 0) {
     instance.hitTestObjects.push(obj.mesh);
 }
 
+function removeHittestValue(instance, value) {
+    if(!value) {
+        return;
+    }
+
+    let index = instance.hitTestObjects.indexOf(value);
+
+    while(index > -1) {
+        instance.hitTestObjects.splice(index, 1);
+        index = instance.hitTestObjects.indexOf(value);
+    }
+}
+
 function removeObjFromHittest(instance, obj) {
     if(obj) {
         if(obj.mesh && obj.mesh.children && obj.mesh.children.length > 0) {
             for(let i = 0; i < obj.mesh.children.length; i++) {
                 const child = obj.mesh.children[i];
 
-                removeFromArray(instance.hitTestObjects,child,false);
+                removeHittestValue(instance, child);
             }
         }
 
-        removeFromArray(instance.hitTestObjects,obj.mesh,false);
-        removeFromArray(instance.hitTestObjects,obj.object,false);
+        removeHittestValue(instance, obj.mesh);
+        removeHittestValue(instance, obj.object);
     }
     
 
-    removeFromArray(instance.hitTestObjects,obj,false);
+    removeHittestValue(instance, obj);
 
 }
 

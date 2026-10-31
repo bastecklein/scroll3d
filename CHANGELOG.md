@@ -15,6 +15,9 @@
   captured during the bounds measurement that already happens at load, so there
   is no extra per-frame work. Regression checks:
   `node --test test/mesh-centering.test.mjs`.
+- Hit-test registration ignores disposed objects and its delayed retry no longer
+  resurrects a removed mesh. Removal also clears every occurrence of a mesh or
+  object from the hit-test list, so a stale entry cannot swallow clicks.
 
 ## 1.1.0 - 2025-07-31
 
