@@ -22,6 +22,10 @@
   scale has reached the baked child transforms. Characters no longer lose their
   body, arm and leg shadows at scales other than 1. Regression check:
   `node --test test/mesh-bounds.test.mjs`.
+- Canvas chunks dispose their two per-chunk `CanvasTexture`s when removed. A
+  material's `dispose()` does not release its maps, so every unloaded canvas
+  chunk previously leaked its diffuse and bump texture memory. Regression check:
+  `node --test test/chunk-texture-lifecycle.test.mjs`.
 
 ## 1.1.0 - 2025-07-31
 

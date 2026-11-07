@@ -519,3 +519,23 @@ standalone clone path was affected.
 a bmloader-built peasant model measured through the helper at scales 1, 0.5, 0.425, 0.375 and
 0.2. The game's production bundle compiles. No browser or device was available, so the
 on-screen shadow result is unmeasured.
+
+## 2026-11-07 — Canvas chunks release their own baked textures on removal
+
+**Decided:** `buildCanvasChunk` records the chunk mesh's two `CanvasTexture`s in
+`userData.ownedTextures`, and `removeChunk` now routes chunk removal through
+`removeChunkObjectFromThree`, which disposes those textures before `removeObjectFromThree`
+disposes the material and geometry. The delayed (`withDelay`) removal path uses the same
+helper. Legacy chunks and shared atlas/liquid materials own no textures and are untouched.
+
+**Why:** `Material.dispose()` does not dispose its maps, and `removeObjectFromThree` only
+disposes the material and geometry. Canvas mode bakes a diffuse and a bump `CanvasTexture`
+per chunk, so every unloaded chunk leaked both. In Realm of Conflict (chunk size 16,
+texture size 64, a 12-chunk window) that is roughly 10–13 MB per chunk, or about 30–40 MB
+per chunk-column crossed, until the mobile GPU thrashed or the browser evicted memory;
+desktop VRAM hid it. The reported symptom was a clean 60 fps that fell to 20–30 after two
+or three new chunks and never recovered.
+
+**Verified:** `node --test test/*.test.mjs` (16 passing), including a new
+`test/chunk-texture-lifecycle.test.mjs` covering direct removal, delayed removal,
+shared/legacy textures and double removal. Not measured on a phone.

@@ -2031,15 +2031,15 @@ export class Scroll3dEngine {
 
         if(withDelay && !isNaN(withDelay) && withDelay > 0) {
             setTimeout(function() {
-                removeObjectFromThree(instance, chunkDat, true);
+                removeChunkObjectFromThree(instance, chunkDat);
                 if(waterDat) {
-                    removeObjectFromThree(instance, waterDat, true);
+                    removeChunkObjectFromThree(instance, waterDat);
                 }
             }, withDelay);
         } else {
-            removeObjectFromThree(instance, chunkDat, true);
+            removeChunkObjectFromThree(instance, chunkDat);
             if(waterDat) {
-                removeObjectFromThree(instance, waterDat, true);
+                removeChunkObjectFromThree(instance, waterDat);
             }
         }
 
@@ -6946,6 +6946,33 @@ function removeObjectFromThree(instance, object, andDispose) {
     if(object.geometry && object.geometry.dispose) {
         object.geometry.dispose();
     }
+}
+
+/**
+ * Removes a chunk mesh and releases the textures the chunk owns. removeObjectFromThree()
+ * handles the material and geometry, but materials do not dispose their maps, and legacy
+ * chunks share the atlas material, so only explicitly-owned textures may be released.
+ */
+function removeChunkObjectFromThree(instance, object) {
+    if(!object) {
+        return;
+    }
+
+    const owned = object.userData && object.userData.ownedTextures;
+
+    if(owned) {
+        for(let i = 0; i < owned.length; i++) {
+            const texture = owned[i];
+
+            if(texture && texture.dispose) {
+                texture.dispose();
+            }
+        }
+
+        object.userData.ownedTextures = null;
+    }
+
+    removeObjectFromThree(instance, object, true);
 }
 
 function getTextureIndex(options,chunkData,instance) {
@@ -12068,6 +12095,13 @@ function buildCanvasChunk(instance, data) {
     
 
     const mesh = new Mesh(geometry, material);
+
+    // A canvas chunk bakes its surface into two per-chunk CanvasTextures. The engine
+    // disposes the material and geometry when the chunk is removed, but a material never
+    // disposes its own maps, so these have to be released explicitly or every chunk
+    // unload leaks its texture memory. Legacy chunks use a shared atlas and set no
+    // ownedTextures.
+    mesh.userData.ownedTextures = [diffuseTexture, bmTexture];
 
     const meshX = Math.round((data.x * instance.chunkSize) * 2);
     const meshY = Math.round((data.y * instance.chunkSize) * 2);
