@@ -26,6 +26,10 @@
   material's `dispose()` does not release its maps, so every unloaded canvas
   chunk previously leaked its diffuse and bump texture memory. Regression check:
   `node --test test/chunk-texture-lifecycle.test.mjs`.
+- Particle systems dispose their sprite uniform texture on teardown, and
+  `clearAllObjects` now removes and disposes particle Points instead of dropping
+  the particle-system map and orphaning them. Regression check:
+  `node --test test/particle-system-lifecycle.test.mjs`.
 
 ## 1.1.0 - 2025-07-31
 

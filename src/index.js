@@ -2181,7 +2181,11 @@ export class Scroll3dEngine {
         instance.lineMaterials.clear();
         instance.chunks = {};
         instance.hitTestObjects = [];
-        instance.particleSystems = {};
+
+        // Particle systems are scene objects in their own right, so clearing the object
+        // map above does not remove or dispose them. Reuse the same teardown path as
+        // dispose() rather than dropping the map and orphaning their Points and textures.
+        clearAllParticleSystems(instance);
 
         if(instance.vppInstances) {
             for(let insName in instance.vppInstances) {
@@ -8021,7 +8025,19 @@ function clearAllParticleSystems(instance) {
         const system = instance.particleSystems[systemname];
 
         removeObjectFromThree(instance,system.points,true);
-        
+
+        // addParticleSystem() loads its particle image into a ShaderMaterial uniform, not
+        // into a material map, so neither the material dispose path nor the scene removal
+        // releases it. Drop the texture explicitly or every torn-down system leaks it.
+        if(system.uniforms && system.uniforms.diffuseTexture && system.uniforms.diffuseTexture.value) {
+            const texture = system.uniforms.diffuseTexture.value;
+
+            if(texture.dispose) {
+                texture.dispose();
+            }
+        }
+
+        system.uniforms = null;
         system.points = null;
         system.geometry = null;
         system.material = null;

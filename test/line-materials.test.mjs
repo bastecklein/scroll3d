@@ -22,7 +22,7 @@ const clearStart = source.indexOf("    clearAllObjects() {");
 const clearEnd = source.indexOf("\n    outlineObjects(", clearStart);
 const lifecycle = runInNewContext([
     ...["initLineObject", "getLineMaterial", "buildLineSegmentsGeometry",
-        "removeObjectFromThree"].map(functionSource),
+        "removeObjectFromThree", "clearAllParticleSystems"].map(functionSource),
     "function " + source.slice(clearStart, clearEnd).trim(),
     "({ initLineObject, removeObjectFromThree, clearAllObjects })"
 ].join("\n"), {
@@ -38,7 +38,8 @@ function instance() {
         scene: new Scene(),
         lineMaterials: new Map(),
         lastWidth: 800, lastHeight: 600,
-        objects: {}, activeUpdateObjects: new Set(), chunks: {}
+        objects: {}, activeUpdateObjects: new Set(), chunks: {},
+        particleSystems: {}
     };
 }
 

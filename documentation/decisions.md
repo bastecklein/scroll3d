@@ -539,3 +539,22 @@ or three new chunks and never recovered.
 **Verified:** `node --test test/*.test.mjs` (16 passing), including a new
 `test/chunk-texture-lifecycle.test.mjs` covering direct removal, delayed removal,
 shared/legacy textures and double removal. Not measured on a phone.
+
+## 2026-11-07 — Particle systems release their texture on teardown
+
+**Decided:** `clearAllParticleSystems` now disposes the texture held in
+`system.uniforms.diffuseTexture.value` and clears `system.uniforms` along with `points`,
+`geometry` and `material`. `clearAllObjects` calls `clearAllParticleSystems(instance)`
+instead of replacing `instance.particleSystems` with an empty object, so a scene clear
+tears down the Points and their textures through the same path as `dispose()`.
+
+**Why:** `addParticleSystem` loads its sprite image into a ShaderMaterial uniform rather
+than a material map, so neither `material.dispose()` nor removing the Points from the
+scene released it. Every chunk build calls `clearAllParticleSystems` and the host
+recreates the systems on the next frame, so Realm of Conflict leaked the fire and smoke
+textures on every chunk build. `clearAllObjects` previously dropped the map without
+removing the Points from the scene, orphaning them entirely.
+
+**Verified:** `node --test test/*.test.mjs` (19 passing), including a new
+`test/particle-system-lifecycle.test.mjs` for direct clearing, double clearing and the
+`clearAllObjects` path. Not measured on a phone.
