@@ -497,3 +497,25 @@ the instanced path may mutate it. The stand-in carries its own minimal `bmDat`
 bmloader's `shared: true` option in its lockfile. This is committed as `4ae2292` and pushed;
 `documentation/patches/scroll3d-shared-instancing.patch` is retained in My City as review history.
 No phone timing has been collected.
+
+## 2026-11-07 — Measure bm shadow-culling bounds only after the root scale reaches baked parts
+
+**Decided:** `finishInitMeshObject` measures the model radius used by the small-part shadow
+cull from a hierarchy whose world matrices have been forced through `updateMatrixWorld(true)`,
+via a new `measureScaledMeshSize` helper. The footprint/tallness path is left untouched.
+
+**Why:** bmloader bakes rigid child transforms (`matrixAutoUpdate=false`) and computes their
+world matrices at the model's previous scale. `Box3.setFromObject` calls
+`updateWorldMatrix(false, false)` per node, which does not recompute a child whose
+`matrixWorldNeedsUpdate` is false. Right after `mesh.scale.set(worldObject.scale)` the
+measurement therefore returned the unscaled size, and dividing by the scale inflated the model
+radius by `1 / scale`. The 12% threshold added with the small-part cull then removed most of a
+character's body from the shadow pass: at scale 0.5 only 4 of 26 peasant parts cast, at goblin
+scale 0.425 only the head, and at gnome scale 0.2 none. After the fix the same character casts
+22 of 26 parts at every scale. `getBMSharedTemplate` already forced the update, so only the
+standalone clone path was affected.
+
+**Verified:** `node --test test/mesh-bounds.test.mjs` and the existing scroll3d tests;
+a bmloader-built peasant model measured through the helper at scales 1, 0.5, 0.425, 0.375 and
+0.2. The game's production bundle compiles. No browser or device was available, so the
+on-screen shadow result is unmeasured.

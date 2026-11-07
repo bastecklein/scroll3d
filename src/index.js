@@ -9601,6 +9601,28 @@ function setMeshObjectBounds(worldObject, size) {
 // to the shadow pass, so they are excluded from it.
 const BM_SHADOW_MIN_RATIO = 0.12;
 
+/**
+ * Measures a mesh hierarchy after forcing the current root scale into every
+ * descendant's world matrix.
+ *
+ * bmloader bakes rigid child transforms (matrixAutoUpdate=false), and
+ * Box3.setFromObject only recomputes a child when its matrixWorldNeedsUpdate is
+ * set. Immediately after mesh.scale changes that flag is still false, so the box
+ * reflects the model before the scale was applied. Measuring the unscaled size
+ * and then dividing by the scale inflates the radius used below to cull small
+ * shadow casters.
+ */
+function measureScaledMeshSize(mesh) {
+    mesh.updateMatrixWorld(true);
+
+    const box = new Box3().setFromObject(mesh);
+    const size = new Vector3();
+
+    box.getSize(size);
+
+    return size;
+}
+
 function finishInitMeshObject(worldObject) {
 
     worldObject.mesh.scale.set(worldObject.scale, worldObject.scale, worldObject.scale);
@@ -9640,7 +9662,15 @@ function finishInitMeshObject(worldObject) {
     worldObject.mesh.receiveShadow = shouldReceive;
 
     const cullSmallShadows = worldObject.subType == "bm";
-    const modelRadius = (size.length() / 2) / (worldObject.scale || 1);
+    let modelRadius = (size.length() / 2) / (worldObject.scale || 1);
+
+    if(cullSmallShadows) {
+        // The size measured above may predate the root scale (see
+        // measureScaledMeshSize), which would inflate this radius and cull most
+        // of a character's body from the shadow pass.
+        const scaledSize = measureScaledMeshSize(worldObject.mesh);
+        modelRadius = (scaledSize.length() / 2) / (worldObject.scale || 1);
+    }
 
     if(worldObject.mesh.children) {
         worldObject.mesh.traverse(function(child) {

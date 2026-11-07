@@ -18,6 +18,10 @@
 - Hit-test registration ignores disposed objects and its delayed retry no longer
   resurrects a removed mesh. Removal also clears every occurrence of a mesh or
   object from the hit-test list, so a stale entry cannot swallow clicks.
+- Standalone bm models measure their shadow-culling radius after the object's
+  scale has reached the baked child transforms. Characters no longer lose their
+  body, arm and leg shadows at scales other than 1. Regression check:
+  `node --test test/mesh-bounds.test.mjs`.
 
 ## 1.1.0 - 2025-07-31
 
